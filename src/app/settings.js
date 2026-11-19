@@ -11,7 +11,7 @@ import { listTools as mcpListTools, setAuthSaver } from '../mcp.js';
 import { signIn, waitRedirect } from '../mcpauth.js';
 import { sandbox, deleteWorkspace } from '../sandbox.js';
 import { workspaces } from '../store.js';
-import { streamBackup, readBackup, applyBackup } from '../backup.js';
+import { streamBackup, readBackupFile, applyBackup } from '../backup.js';
 import { usageSummary, clearUsage, chatSpend, sourceSpend, todayTokens } from '../usage.js';
 import { DEFAULT_MAIN, RP_GUIDE, IMPERSONATE_PROMPT } from '../rp.js';
 import { ensurePersonas } from '../personas.js';
@@ -22,7 +22,7 @@ import { HOME_TAR, MOVE_DIR, cleanHomeCmd, homeStatusCmd, packHomeCmd, parseHome
 import { markDeleted, newChat, openDrawer, openSheet, refreshUsage, selectConv } from './chatlist.js';
 import { refreshModels } from './composer.js';
 import { $, hooks, ACCENTS, rpColor, applyPrefs, defaultChatPersona, defaultPersona, defaultRpPersona, el, fmtTokens, pref, renderMarkdown, rpPersonaFlag, state, toast, uid, userName, userPersona } from './core.js';
-import { canExportLinux, canUsePhoneFolder, exportLinuxFile, pickIntoLinux } from '../phonefolder.js';
+import { canExportLinux, canPickToCache, canUsePhoneFolder, exportLinuxFile, pickFileToCache, pickIntoLinux } from '../phonefolder.js';
 import { fillSamplerBox, readSamplerBox, stopStream } from './engine.js';
 import { capturePreset, fillPresetPage } from './rppresets-ui.js';
 import { appBuild, fillLearnModelSelect, setPref, shareStream, updateToolsChip } from './extras.js';
@@ -1119,30 +1119,47 @@ $('#move-linux-import').onclick = async () => {
   btn.disabled = false;
 };
 let pendingRestore = null;
-$('#backup-import').onclick = () => $('#backup-file').click();
+// On the phone the picked file is copied into the app's storage and read from there in exact pieces (decision 220)
+$('#backup-import').onclick = async () => {
+  if (!canPickToCache()) return $('#backup-file').click();
+  try {
+    const f = await pickFileToCache((done, total) => toast(`Reading the backup… ${fmtBytes(done)}${total > 0 ? ` of ${fmtBytes(total)}` : ''}`));
+    if (f) await openRestore(f);
+  } catch (err) {
+    toast(err.message, 9000);
+  }
+};
 $('#backup-file').onchange = async (e) => {
   const f = e.target.files[0];
   e.target.value = '';
-  if (!f) return;
+  if (f) await openRestore(f);
+};
+async function openRestore(f) {
   try {
-    pendingRestore = readBackup(new Uint8Array(await f.arrayBuffer()));
+    toast('Reading the backup…');
+    pendingRestore = await readBackupFile(f); // a piece at a time (a big backup does not fit in memory at once)
+    pendingRestore.drop = f.drop; // the copy in the app's storage goes once it is restored
     const d = pendingRestore.data;
-    $('#restore-info').textContent = `Backup from ${new Date(d.exportedAt).toLocaleString()}: ${d.conversations?.length || 0} chats, ${d.settings?.personas?.length || 0} personas, ${d.settings?.memories?.length || 0} memories, files for ${Object.keys(pendingRestore.ws).length} chats.${d.everything ? ' This is an Export everything (with keys, git histories and indexes): on a new app choose Replace.' : d.settings?.apiKey ? ' Includes API key.' : ''}`;
+    $('#restore-info').textContent = RESTORE_INFO(d);
     openSheet('#settings-sheet', false);
     openSheet('#restore-sheet', true);
   } catch (err) {
-    toast(err.message, 4000);
+    toast(err.message, 9000);
   }
-};
+}
+const RESTORE_INFO = (d) => `Backup from ${new Date(d.exportedAt).toLocaleString()}: ${d.conversations?.length || 0} chats, ${d.settings?.personas?.length || 0} personas, ${d.settings?.memories?.length || 0} memories, files for ${pendingRestore.wsCount ?? Object.keys(pendingRestore.ws).length} chats.${d.everything ? ' This is an Export everything (with keys, git histories and indexes): on a new app choose Replace.' : d.settings?.apiKey ? ' Includes API key.' : ''}`;
 async function doRestore(mode) {
   if (!pendingRestore) return;
   if (mode === 'replace' && !confirm('Replace everything on this phone with the backup? Current chats and settings will be deleted.')) return;
   try {
     stopStream();
     sandbox.kill();
-    const { settings } = await applyBackup(pendingRestore, mode, state.settings);
+    const { settings, stats } = await applyBackup(pendingRestore, mode, state.settings);
     ensurePersonas(settings);
     await saveSettings(settings);
+    // files damaged in the zip were left out: say which, before the app reloads
+    if (stats.damaged?.length) alert(`Restored, but ${stats.damaged.length} file${stats.damaged.length === 1 ? ' was' : 's were'} damaged in the backup and left out:\n\n${stats.damaged.slice(0, 8).join('\n')}${stats.damaged.length > 8 ? '\n…' : ''}`);
+    pendingRestore.drop?.();
     toast('Restored – reloading…');
     setTimeout(() => location.reload(), 600);
   } catch (e) {

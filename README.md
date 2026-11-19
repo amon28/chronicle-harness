@@ -36,6 +36,18 @@ You don't need Claude at all: any OpenAI-compatible provider works, and the app 
 
 The full feature list is in [`docs/FEATURES.md`](docs/FEATURES.md).
 
+## Screenshots
+
+| Chat | Agent with tools | Roleplay |
+| --- | --- | --- |
+| <img src="docs/screenshots/chat.png" width="250" alt="A chat with an assistant: a travel plan with headings, lists and a table"> | <img src="docs/screenshots/agent.png" width="250" alt="The Coder persona reading a CSV, running Python and writing a file, with each step shown"> | <img src="docs/screenshots/roleplay.png" width="250" alt="A roleplay with a character card: actions in italics, dialogue in colour"> |
+
+| Chat list | Models | Settings |
+| --- | --- | --- |
+| <img src="docs/screenshots/chats.png" width="250" alt="The side list of chats with roleplay tab and usage meters"> | <img src="docs/screenshots/models.png" width="250" alt="The model picker with prices, context sizes and filters"> | <img src="docs/screenshots/settings.png" width="250" alt="The Settings page"> |
+
+The pictures are made from the app itself with made-up chats (`SCREENSHOTS=1 npx playwright test tests/e2e/screenshots.spec.js`).
+
 ## Install
 
 1. Open the [latest release](https://github.com/amon28/chronicle-harness/releases/tag/latest) on your Android phone and tap **chronicle.apk**.
@@ -43,6 +55,23 @@ The full feature list is in [`docs/FEATURES.md`](docs/FEATURES.md).
 3. Open Chronicle, add an API key in **Settings › Account & models**, pick a model and start a chat.
 
 Updates install over the old version and keep your chats, as long as every build is signed with the same key (see below).
+
+### "Blocked by Play Protect" / "this app may steal your data"
+
+On some phones Android refuses to install Chronicle, or warns that it could steal data. This is Google Play Protect's **enhanced fraud protection**, which is on by default in several countries (among them the Philippines, India, Brazil, Thailand, Singapore and Malaysia). It blocks any app installed from outside the Play Store – a browser, a file manager, a chat app – that *declares* one of these permissions:
+
+- reading or receiving SMS (Chronicle asks for **read SMS**, for the optional "read my texts" tool)
+- reading notifications (Chronicle has a **notification listener**, for the optional "read my notifications" tool)
+- accessibility services
+
+The check only looks at the list of permissions in the app, not at what the app does with them. Chronicle keeps your data on your phone and these two tools only work after you switch them on and Android asks you, but Play Protect cannot know that. It's the same block any app with these permissions gets.
+
+What you can do:
+
+- **Install it anyway:** open the Play Store › your profile › Play Protect › ⚙ and turn off "Scan apps with Play Protect" for the install, then turn it back on. Or install from a computer with `adb install chronicle.apk` (not covered by this check).
+- **Build it without those permissions** if you don't need texts or notifications: remove `READ_SMS` and the `NotifyListener` service from `android/app/src/main/AndroidManifest.xml` and build it yourself (see below). The rest of the app works the same.
+
+Google is also bringing in **developer verification** (from September 2026 in Brazil, Indonesia, Singapore and Thailand, worldwide in 2027): apps on certified phones must come from a verified developer, or be installed through an extra "advanced" step. Read Google's [developer verification guide](https://support.google.com/android-developer-console/answer/16561738) and the [announcement](https://android-developers.googleblog.com/2026/03/android-developer-verification.html) for what that means for installing apps from GitHub.
 
 ## Build it yourself
 
