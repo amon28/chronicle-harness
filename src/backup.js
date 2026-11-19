@@ -3,6 +3,7 @@
 import { unzipSync, strToU8, strFromU8, Zip, ZipDeflate, ZipPassThrough } from 'fflate';
 import { conversations, workspaces, art, kvMove } from './store.js';
 import { encodeValue, decodeValue, localEntries, putLocalEntries } from './movedata.js';
+import { openZip, isGzip } from './zipread.js';
 import { deleteWorkspace } from './sandbox.js';
 import { isClaudeSignInCopy } from './claudesecrets.js';
 
@@ -163,12 +164,7 @@ export function readBackup(bytes) {
   for (const [name, d] of Object.entries(entries)) {
     const m = name.match(/^workspaces\/([^/]+)\/(.+)$/);
     if (!m || name.endsWith('/')) continue;
-    const k = Object.hasOwn(meta || {}, m[1]) && Object.hasOwn(meta[m[1]] || {}, m[2]) ? meta[m[1]][m[2]] : {};
-    const f = { data: d, mtime: k.mtime > 0 ? k.mtime : Date.now() };
-    if (typeof k.mode === 'number') (f.mode = k.mode & 0o777), (f.exec = (f.mode & 0o111) !== 0);
-    else if (typeof k.exec === 'boolean') f.exec = k.exec;
-    if (typeof k.by === 'string') f.by = k.by;
-    (ws[m[1]] ||= Object.create(null))[m[2]] = f;
+    (ws[m[1]] ||= Object.create(null))[m[2]] = wsFile(meta, m[1], m[2], d);
   }
   const artFiles = {};
   for (const [name, d] of Object.entries(entries)) {
@@ -190,6 +186,92 @@ export function readBackup(bytes) {
   return { data, ws, art: artFiles, ...(meta ? { meta } : {}), ...(Object.keys(kv).length || local ? { extra: { kv, local } } : {}) };
 }
 
+/** A workspace file from the zip, with its mode, exec bit, date and writer from workspaces.json. */
+function wsFile(meta, id, path, d) {
+  const k = Object.hasOwn(meta || {}, id) && Object.hasOwn(meta[id] || {}, path) ? meta[id][path] : {};
+  const f = { data: d, mtime: k.mtime > 0 ? k.mtime : Date.now() };
+  if (typeof k.mode === 'number') (f.mode = k.mode & 0o777), (f.exec = (f.mode & 0o111) !== 0);
+  else if (typeof k.exec === 'boolean') f.exec = k.exec;
+  if (typeof k.by === 'string') f.by = k.by;
+  return f;
+}
+
+/**
+ * A backup read straight from its file, one entry at a time (decision 220): only backup.json, the file list, pictures
+ * and the small extras are read now; each chat's files when that chat is restored – a big "Export everything" no
+ * longer has to fit in memory twice. ws is then a function (chat id → its files). Throws with the real reason.
+ */
+export async function readBackupFile(blob) {
+  if (await isGzip(blob)) throw new Error('That is the Linux home archive (.tar.gz): bring it back with 🐧 Import Linux home… (after setting up Linux). Restore takes the .zip.');
+  let z;
+  try {
+    z = await openZip(blob);
+  } catch (e) {
+    throw new Error(`This is not a backup zip – ${e.message}`);
+  }
+  if (!z.has('backup.json')) throw new Error('backup.json is missing – not a Chronicle backup');
+  let data;
+  try {
+    data = JSON.parse(strFromU8(await z.get('backup.json')));
+  } catch (e) {
+    throw new Error(`The backup's backup.json could not be read (${e.message})`);
+  }
+  // backups made before the rename (as "opencode-mobile") restore too: that is how data moves to the new app id
+  if (data.app !== 'chronicle' && data.app !== 'opencode-mobile') throw new Error('Not a Chronicle backup');
+  let meta = null;
+  try {
+    meta = z.has('workspaces.json') ? JSON.parse(strFromU8(await z.get('workspaces.json'))) : null;
+  } catch {
+    /* a damaged list: the files still come back, with today's date */
+  }
+  const byChat = new Map();
+  const artFiles = {};
+  const kv = {};
+  let local = null;
+  // a file damaged in the zip (a checksum that does not match) is left out and named, the rest still comes back
+  const damaged = [];
+  const getOr = async (name) => {
+    try {
+      return await z.get(name);
+    } catch (e) {
+      damaged.push(e.message);
+      return null;
+    }
+  };
+  for (const name of z.names) {
+    let m = name.match(/^workspaces\/([^/]+)\/(.+)$/);
+    if (m) {
+      if (!byChat.has(m[1])) byChat.set(m[1], []);
+      byChat.get(m[1]).push(m[2]);
+      continue;
+    }
+    m = name.match(/^art\/([^/]+)\.txt$/);
+    if (m) {
+      const d = await getOr(name);
+      if (d) artFiles[m[1]] = strFromU8(d);
+      continue;
+    }
+    m = name.match(/^extra\/kv\/(.+)\.json$/);
+    if (m) kv[decodeURIComponent(m[1])] = () => getOr(name).then((d) => (d ? strFromU8(d) : null)); // read when it is put back
+  }
+  try {
+    if (z.has('extra/local.json')) local = JSON.parse(strFromU8(await z.get('extra/local.json')));
+  } catch {
+    /* damaged: left out */
+  }
+  const ws = async (id) => {
+    const paths = byChat.get(id);
+    if (!paths) return null;
+    const files = Object.create(null);
+    for (const path of paths) {
+      const d = await getOr(`workspaces/${id}/${path}`);
+      if (d) files[path] = wsFile(meta, id, path, d);
+    }
+    return files;
+  };
+  return { data, ws, wsCount: byChat.size, damaged, art: artFiles, ...(meta ? { meta } : {}), ...(Object.keys(kv).length || local ? { extra: { kv, local } } : {}) };
+}
+
 /**
  * Apply a parsed backup. mode 'merge' keeps everything on the phone and adds what's missing
  * (newer copy of a chat wins); 'replace' wipes chats and settings first (keeping the current
@@ -205,7 +287,7 @@ export function mergeMemories(mine = [], theirs = []) {
   return [...ms.values()];
 }
 
-export async function applyBackup({ data, ws, art: artFiles = {}, extra = null }, mode, current) {
+export async function applyBackup({ data, ws, art: artFiles = {}, extra = null, damaged = null }, mode, current) {
   const b = data.settings || {};
   let settings;
   if (mode === 'replace') {
@@ -249,9 +331,11 @@ export async function applyBackup({ data, ws, art: artFiles = {}, extra = null }
     const cur = existing.get(c.id);
     if (cur && (cur.updatedAt || 0) >= (c.updatedAt || 0)) continue;
     await conversations.put(c);
-    if (ws[c.id]) {
+    // ws: the files of every chat (a backup read whole), or a function that reads one chat's files from the file
+    const files = typeof ws === 'function' ? await ws(c.id) : ws[c.id];
+    if (files) {
       await deleteWorkspace(c.id); // the old files, the shell's copy of them and the index line, then the backup's
-      await workspaces.put({ id: c.id, files: ws[c.id] });
+      await workspaces.put({ id: c.id, files });
     }
     added++;
   }
@@ -262,11 +346,13 @@ export async function applyBackup({ data, ws, art: artFiles = {}, extra = null }
   let extras = 0;
   if (extra) {
     const restored = new Set((data.conversations || []).map((c) => c.id));
-    for (const [k, text] of Object.entries(extra.kv || {})) {
+    for (const [k, v] of Object.entries(extra.kv || {})) {
       const m = /^(git|vec):(.+)$/.exec(k);
       if (!m || !restored.has(m[2])) continue;
       if (mode !== 'replace' && (await kvMove.get(k).catch(() => null)) != null) continue;
       try {
+        const text = typeof v === 'function' ? await v() : v;
+        if (text == null) continue; // damaged in the zip: named in the restore's report
         await kvMove.put(k, decodeValue(text));
         extras++;
       } catch {
@@ -275,5 +361,5 @@ export async function applyBackup({ data, ws, art: artFiles = {}, extra = null }
     }
     if (extra.local) extras += putLocalEntries(extra.local);
   }
-  return { settings, stats: { chats: added, personas: (settings.personas || []).length, memories: (settings.memories || []).length, ...(extra ? { extras } : {}) } };
+  return { settings, stats: { chats: added, personas: (settings.personas || []).length, memories: (settings.memories || []).length, ...(extra ? { extras } : {}), ...(damaged?.length ? { damaged: [...damaged] } : {}) } };
 }

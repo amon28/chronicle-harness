@@ -314,6 +314,114 @@ public class FolderPlugin extends Plugin {
      * → { name, folder, bytes }
      */
     /**
+     * A file the user picks (a backup), copied whole into the app's own cache, so it can then be read in exact pieces
+     * with readCached (decision 220). Reading a big picked file through the WebView in slices could land on the wrong
+     * bytes; a plain file in the app's storage cannot. → { path, size, name } or {} when cancelled.
+     */
+    @PluginMethod
+    public void pickToCache(PluginCall call) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(call, i, "onPickedToCache");
+    }
+
+    private File importDir() {
+        return new File(getContext().getCacheDir(), "import");
+    }
+
+    @ActivityCallback
+    private void onPickedToCache(final PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            call.resolve(new JSObject()); // cancelled
+            return;
+        }
+        final Uri uri = result.getData().getData();
+        new Thread(() -> {
+            File dest = null;
+            try {
+                ContentResolver cr = getContext().getContentResolver();
+                String name = "backup.zip";
+                long total = -1;
+                try (android.database.Cursor c = cr.query(uri, new String[] { android.provider.OpenableColumns.SIZE, android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+                    if (c != null && c.moveToFirst()) {
+                        if (!c.isNull(0)) total = c.getLong(0);
+                        if (!c.isNull(1)) name = c.getString(1);
+                    }
+                }
+                File dir = importDir();
+                File[] old = dir.listFiles();
+                if (old != null) for (File f : old) f.delete(); // one picked file at a time
+                if (!dir.isDirectory() && !dir.mkdirs()) throw new Exception("no room in the app's cache");
+                dest = new File(dir, "picked.bin");
+                long done = 0, told = 0;
+                try (InputStream in = cr.openInputStream(uri); OutputStream out = new java.io.FileOutputStream(dest)) {
+                    if (in == null) throw new Exception("could not open the file");
+                    byte[] buf = new byte[1 << 20];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                        done += n;
+                        if (done - told >= 16L << 20) {
+                            told = done;
+                            JSObject pr = new JSObject();
+                            pr.put("done", done);
+                            pr.put("total", total);
+                            notifyListeners("pickProgress", pr);
+                        }
+                    }
+                }
+                if (total > 0 && done != total) throw new Exception("only " + done + " of " + total + " bytes could be read");
+                JSObject r = new JSObject();
+                r.put("path", dest.getAbsolutePath());
+                r.put("size", done);
+                r.put("name", name);
+                call.resolve(r);
+            } catch (Exception e) {
+                if (dest != null) dest.delete();
+                call.reject("Could not read the file: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /** length bytes from offset of the file pickToCache made (at most 8 MB at a time). → { data: base64 } */
+    @PluginMethod
+    public void readCached(final PluginCall call) {
+        new Thread(() -> {
+            try {
+                File f = new File(call.getString("path", "")).getCanonicalFile();
+                if (!f.getPath().startsWith(importDir().getCanonicalPath() + "/")) throw new Exception("not a picked file");
+                long off = Args.whole(call, "offset", 0L);
+                int len = (int) Math.min(8L << 20, Math.max(0, Args.whole(call, "length", 0L)));
+                byte[] buf = new byte[len];
+                int got = 0;
+                try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r")) {
+                    raf.seek(off);
+                    while (got < len) {
+                        int n = raf.read(buf, got, len - got);
+                        if (n < 0) break;
+                        got += n;
+                    }
+                }
+                JSObject r = new JSObject();
+                r.put("data", Base64.encodeToString(buf, 0, got, Base64.NO_WRAP));
+                call.resolve(r);
+            } catch (Exception e) {
+                call.reject("Could not read the file: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /** The copy pickToCache made is not needed any more. */
+    @PluginMethod
+    public void dropCached(PluginCall call) {
+        File[] old = importDir().listFiles();
+        if (old != null) for (File f : old) f.delete();
+        call.resolve();
+    }
+
+    /**
      * A file the user picks on the phone (Android's file picker), streamed into Linux at `guest` – only under
      * /var/tmp/chronicle-move/, where "Import Linux home" unpacks it (decision 218). Never through the app's memory: a
      * home folder can be gigabytes. Progress: "importProgress" { done, total }. → { bytes, name } or {} when cancelled.

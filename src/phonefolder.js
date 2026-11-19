@@ -40,6 +40,36 @@ export async function exportLinuxFile(guest, { folder = null, path = '', name = 
   }
 }
 export const canExportLinux = () => typeof impl()?.exportLinuxFile === 'function';
+/**
+ * A file the user picks (a backup), copied into the app's own storage first and then read in exact pieces through the
+ * native side (decision 220) – reading a big picked file in slices through the WebView could land on the wrong bytes.
+ * → a Blob-like { size, name, slice(a, b).arrayBuffer(), drop() }, or null when cancelled / not available here.
+ */
+export const canPickToCache = () => typeof impl()?.pickToCache === 'function';
+export async function pickFileToCache(onProgress = null) {
+  const h = onProgress ? await impl().addListener?.('pickProgress', (e) => onProgress(e.done, e.total)) : null;
+  let r;
+  try {
+    r = await impl().pickToCache();
+  } finally {
+    h?.remove?.();
+  }
+  if (!r?.path) return null;
+  const readRange = async (a, b) => {
+    const out = new Uint8Array(Math.max(0, b - a));
+    for (let o = 0; o < out.length; ) {
+      const n = Math.min(8 << 20, out.length - o);
+      const { data } = await impl().readCached({ path: r.path, offset: a + o, length: n });
+      const s = atob(data || '');
+      if (!s.length) throw new Error(`the file ended early (at byte ${a + o} of ${r.size})`);
+      for (let i = 0; i < s.length; i++) out[o + i] = s.charCodeAt(i);
+      o += s.length;
+    }
+    return out;
+  };
+  const blobLike = (from, to) => ({ size: to - from, slice: (a = 0, b = to - from) => blobLike(from + a, from + Math.min(b, to - from)), arrayBuffer: async () => (await readRange(from, to)).buffer });
+  return { ...blobLike(0, r.size), name: r.name, drop: () => impl().dropCached?.().catch(() => {}) };
+}
 /** A file the user picks on the phone, streamed into Linux at guest (only under /var/tmp/chronicle-move/). → { bytes, name } or {} */
 export async function pickIntoLinux(guest, onProgress = null) {
   const h = onProgress ? await impl().addListener?.('importProgress', (e) => onProgress(e.done, e.total)) : null;
