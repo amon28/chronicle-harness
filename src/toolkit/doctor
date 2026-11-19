@@ -1,0 +1,58 @@
+#!/bin/sh
+# doctor — everything I would otherwise discover by failing, in one call.
+# Run it before the first task on a fresh machine: what this is, what it has, what it can reach,
+# and where it can actually write. "ffmpeg MISSING" here costs one line instead of a 7-minute apt call.
+D_HOSTS=${DOCTOR_HOSTS:-"example.com deb.debian.org"}
+
+printf 'kernel   '; uname -srm 2>/dev/null || uname -a
+printf 'userland '; (. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}") || echo busybox
+printf 'shell    '; ls -l /bin/sh 2>/dev/null | sed 's/.*-> //' || echo sh
+printf 'cores    '; nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo '?'
+printf 'memory   '; awk '/^MemTotal:/{printf "%d MB\n", $2/1024}' /proc/meminfo 2>/dev/null || echo '?'
+printf 'disk /   '; df -h / 2>/dev/null | tail -1 | awk '{print $4 " free of " $2}'
+printf 'uptime   '; awk '{printf "%d s\n", $1}' /proc/uptime 2>/dev/null || echo '?'
+printf 'cwd      '; pwd 2>/dev/null || echo '?'
+printf 'path     '; echo "$PATH"
+
+# busybox applets have no --version, and answer with "unrecognized option" on stderr: try the
+# documented flags in turn, then say "present" - never print the error text as if it were a version
+for t in python3 ffmpeg curl openssl git node npm tar sha256sum wget jq; do
+  printf '%-10s ' "$t"
+  if command -v "$t" >/dev/null 2>&1; then
+    v=$("$t" --version 2>/dev/null | head -1 | cut -c1-46)
+    [ -n "$v" ] || v=$("$t" -V 2>/dev/null | head -1 | cut -c1-46)
+    [ -n "$v" ] || v=$("$t" -version 2>/dev/null | head -1 | cut -c1-46)
+    printf '%s\n' "${v:-present}"
+  else
+    echo MISSING
+  fi
+done
+
+for h in $D_HOSTS; do
+  printf 'net %-22s ' "$h"
+  if command -v wget >/dev/null 2>&1; then
+    wget -q -O /dev/null --timeout=8 "https://$h" 2>/dev/null && echo ok || echo BLOCKED
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsS -m 8 -o /dev/null "https://$h" 2>/dev/null && echo ok || echo BLOCKED
+  else
+    echo "no wget/curl"
+  fi
+done
+
+# $HOME is /root in this shell: print each directory once
+for d in $(printf '%s\n' /workspace /phone /root "$HOME" /tmp | awk '!seen[$0]++'); do
+  printf '%-12s ' "$d"
+  if [ -d "$d" ] && [ -w "$d" ]; then echo writable
+  elif [ -d "$d" ]; then echo "read-only"
+  else echo "missing"; fi
+done
+
+# what the toolkit thinks it is (one home for every helper; the rest is a cache)
+if [ -f /usr/local/bin/.toolkit ]; then
+  printf 'toolkit  '; awk '$1 ~ /^[0-9a-f]+$/ { printf "%s=%s ", $2, substr($1, 1, 8) }' /usr/local/bin/.toolkit; echo
+  printf 'scripts  '; for n in job doctor toolkit-pull; do
+    if [ -x "/usr/local/bin/$n" ]; then printf '%s ' "$n"; else printf '%s:MISSING ' "$n"; fi
+  done; echo
+else
+  printf 'toolkit  %s\n' "not installed"
+fi

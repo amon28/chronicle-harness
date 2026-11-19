@@ -1,0 +1,6 @@
+{
+  "appId": "dev.chronicle.app",
+  "appName": "Chronicle",
+  "webDir": "dist",
+  "android": { "backgroundColor": "#0b0b0c" }
+}

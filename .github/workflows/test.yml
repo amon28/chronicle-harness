@@ -1,0 +1,54 @@
+name: Tests
+
+on:
+  # a branch with an open PR is tested by the pull_request run; testing the same push twice doubled the minutes used
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'proxy/**']
+  pull_request:
+    paths-ignore: ['**.md', 'proxy/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# three pushes used to queue three full runs; only the newest commit matters
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Install Playwright's Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests (built app + mock API)
+        run: npx playwright test
+
+      - name: Upload the test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

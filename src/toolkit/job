@@ -1,0 +1,120 @@
+#!/bin/sh
+# job — submit, poll and stop long commands instead of gambling on a timeout.
+#
+#   job run 'ffmpeg -i in.mp4 out.m3u8'    -> a handle in well under a second
+#   job out <id> [lines]                   -> RUNNING / DONE exit=N plus the tail so far
+#   job wait <id> [seconds]                -> block until it ends (or the wait is up), then print out
+#   job list                               -> every job this machine has submitted
+#   job kill <id>                          -> ask it to stop
+#   job rm <id>                            -> forget it
+#
+# One home per job: $JOB_DIR (default /tmp/jobs) holds <id>.log, <id>.pid and <id>.exit.
+# The command runs in its own session, so it outlives the call that started it and closing the
+# terminal does not take it down. Exit codes are plain numbers: this runs on busybox sh and
+# bash unchanged, and never needs date +%N.
+J=${JOB_DIR:-/tmp/jobs}
+
+usage() {
+  echo "usage: job run CMD | job out ID [LINES] | job wait ID [SECS] | job list | job kill ID | job rm ID" >&2
+  exit 2
+}
+
+# RUNNING, "DONE exit=0", or DONE when the exit code never landed
+_job_state() {
+  _pid=
+  [ -f "$J/$1.pid" ] && _pid=$(cat "$J/$1.pid" 2>/dev/null)
+  if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then
+    echo RUNNING
+  elif [ -f "$J/$1.exit" ]; then
+    echo "DONE exit=$(cat "$J/$1.exit" 2>/dev/null)"
+  else
+    echo DONE
+  fi
+}
+
+[ $# -ge 1 ] || usage
+
+case "$1" in
+run)
+  shift
+  [ $# -ge 1 ] || usage
+  mkdir -p "$J" || { echo "job: cannot write $J" >&2; exit 1; }
+  # one id per submission, even for two jobs started in the same second from one shell
+  _seq=0
+  [ -f "$J/.seq" ] && _seq=$(cat "$J/.seq" 2>/dev/null)
+  case "$_seq" in ''|*[!0-9]*) _seq=0 ;; esac
+  _seq=$((_seq + 1))
+  echo "$_seq" >"$J/.seq"
+  _id=$(date +%s)-$$-$_seq
+  _log="$J/$_id.log"
+  : >"$_log"
+  rm -f "$J/$_id.exit" "$J/$_id.pid"
+  # The command runs in a subshell so that a script which calls 'exit 7' still leaves its status
+  # behind: without the parentheses, 'exit' would end the wrapper before it could write the file.
+  _wrap="( $* ); __job_rc=\$?; echo \$__job_rc > \"$J/$_id.exit\""
+  if command -v setsid >/dev/null 2>&1; then
+    setsid sh -c "$_wrap" >>"$_log" 2>&1 &
+  else
+    sh -c "$_wrap" >>"$_log" 2>&1 &
+  fi
+  echo $! >"$J/$_id.pid"
+  echo "$_id"
+  ;;
+out)
+  [ $# -ge 2 ] || usage
+  _id=$2
+  _lines=${3:-40}
+  if [ ! -f "$J/$_id.log" ] && [ ! -f "$J/$_id.pid" ]; then
+    echo "job: no such job: $_id" >&2
+    exit 1
+  fi
+  echo "job $_id $(_job_state "$_id") started=$(date -r "$J/$_id.log" +%H:%M:%S 2>/dev/null || echo ?)"
+  if [ -s "$J/$_id.log" ]; then
+    tail -n "$_lines" "$J/$_id.log"
+  else
+    echo "(no output yet)"
+  fi
+  ;;
+wait)
+  [ $# -ge 2 ] || usage
+  _id=$2
+  _secs=${3:-60}
+  case "$_secs" in ''|*[!0-9]*) _secs=60 ;; esac
+  _i=0
+  while [ "$_i" -lt "$_secs" ]; do
+    case "$(_job_state "$_id")" in DONE*) break ;; esac
+    sleep 1
+    _i=$((_i + 1))
+  done
+  exec "$0" out "$_id" ${4:-40}
+  ;;
+list)
+  [ -d "$J" ] || { echo "job: no jobs (nothing in $J)"; exit 0; }
+  _n=0
+  for _f in "$J"/*.log; do
+    [ -f "$_f" ] || continue
+    _id=$(basename "$_f" .log)
+    _n=$((_n + 1))
+    printf '%s  %-12s %s\n' "$_id" "$(_job_state "$_id")" "$(head -c 60 "$_f" 2>/dev/null | tr '\n' ' ')"
+  done
+  [ "$_n" -gt 0 ] || echo "job: no jobs (nothing in $J)"
+  ;;
+kill)
+  [ $# -ge 2 ] || usage
+  _id=$2
+  _pid=$(cat "$J/$_id.pid" 2>/dev/null)
+  if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then
+    kill -TERM "$_pid" 2>/dev/null
+    echo "job $_id: sent TERM to $_pid"
+  else
+    echo "job $_id: not running ($(_job_state "$_id"))"
+  fi
+  ;;
+rm)
+  [ $# -ge 2 ] || usage
+  _id=$2
+  rm -f "$J/$_id.log" "$J/$_id.pid" "$J/$_id.exit"
+  echo "job $_id: forgotten"
+  ;;
+*) usage ;;
+esac

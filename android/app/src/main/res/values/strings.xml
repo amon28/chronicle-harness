@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Chronicle</string>
+    <string name="title_activity_main">Chronicle</string>
+    <string name="package_name">dev.chronicle.app</string>
+    <string name="custom_url_scheme">dev.chronicle.app</string>
+    <string name="tile_label">New chat</string>
+    <string name="widget_new">✎  New chat</string>
+    <string name="widget_voice">🎤</string>
+    <string name="widget_label">Chronicle quick chat</string>
+</resources>
