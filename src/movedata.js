@@ -74,7 +74,9 @@ export const HOME_TAR = `${MOVE_DIR}/linux-home.tar.gz`;
  * Never in the file: Claude Code's sign-in and account (only Claude Code may use them – sign in again there), the
  * app's own sign-in folder (the app writes it again from its keys), and caches that come back by themselves.
  */
-export const HOME_EXCLUDES = ['./.claude/.credentials.json', './.claude.json', './.claude.json.backup*', './.claude/backups', './.config/chronicle', './.cache', './.npm/_cacache'];
+// .l2s.tmp_*: git's half-written temporary objects under proot's hard-link emulation – they point at themselves and
+// cannot be opened (an interrupted git write leaves them); git never uses them
+export const HOME_EXCLUDES = ['.l2s.tmp_*', './.claude/.credentials.json', './.claude.json', './.claude.json.backup*', './.claude/backups', './.config/chronicle', './.cache', './.npm/_cacache'];
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 
 /** Pack /root into HOME_TAR in the background (it can take longer than one command may run). */
@@ -82,8 +84,10 @@ export function packHomeCmd({ home = '/root', dir = MOVE_DIR } = {}) {
   const ex = HOME_EXCLUDES.map((e) => `--exclude=${q(e)}`).join(' ');
   return [
     `D=${q(dir)}; H=${q(home)}; mkdir -p "$D"; rm -f "$D/home.exit" "$D/linux-home.tar.gz"`,
-    // GNU tar exits 1 when a file changed while it was read (a log being written): the file is still good
-    `setsid nohup sh -c 'cd "$1" && tar -czpf "$0/linux-home.tar.gz" ${ex.replace(/'/g, "'\\''")} . ; echo $? > "$0/home.exit"' "$D" "$H" > "$D/home.log" 2>&1 < /dev/null &`,
+    // GNU tar exits 1 when a file changed while it was read (a log being written): the file is still good. A file
+    // that cannot be read at all (a broken link loop) is skipped and named in the log, not a reason to give up on
+    // the whole home folder (--ignore-failed-read; GNU tar only – busybox tar has no such option)
+    `setsid nohup sh -c 'cd "$1" && F=""; tar --version 2>/dev/null | grep -q GNU && F="--ignore-failed-read --warning=no-file-changed"; tar -czpf "$0/linux-home.tar.gz" $F ${ex.replace(/'/g, "'\\''")} . ; echo $? > "$0/home.exit"' "$D" "$H" > "$D/home.log" 2>&1 < /dev/null &`,
     'echo "@@STARTED"',
   ].join('\n');
 }
@@ -100,14 +104,18 @@ export function homeStatusCmd({ dir = MOVE_DIR } = {}) {
   return [
     `D=${q(dir)}`,
     'S=$(wc -c < "$D/linux-home.tar.gz" 2>/dev/null || echo 0)',
-    'if [ -f "$D/home.exit" ]; then echo "@@EXIT $(cat "$D/home.exit") $S"; tail -n 5 "$D/home.log" 2>/dev/null; else echo "@@RUN $S"; fi',
+    'if [ -f "$D/home.exit" ]; then echo "@@EXIT $(cat "$D/home.exit") $S"; echo "@@SKIPPED $(grep -c "Cannot" "$D/home.log" 2>/dev/null)"; grep "Cannot" "$D/home.log" 2>/dev/null | head -n 5; tail -n 5 "$D/home.log" 2>/dev/null | grep -v "Cannot"; else echo "@@RUN $S"; fi; true',
   ].join('\n');
 }
-/** → { done, ok, bytes, log } */
+/** → { done, ok, bytes, skipped (files that could not be read and were left out), skippedNames, log } */
 export function parseHomeStatus(out) {
   const t = String(out || '');
   const ex = /@@EXIT (\d+) (\d+)/.exec(t);
-  if (ex) return { done: true, ok: Number(ex[1]) <= 1, bytes: Number(ex[2]), log: t.split('\n').slice(1).join('\n').trim().slice(-600) };
+  if (ex) {
+    const lines = t.split('\n').slice(1).filter((l) => !/^@@SKIPPED/.test(l));
+    const skippedNames = lines.map((l) => /^tar: (?:\.\/)?(.+?): Cannot /.exec(l)?.[1]).filter(Boolean);
+    return { done: true, ok: Number(ex[1]) <= 1, bytes: Number(ex[2]), skipped: Number(/@@SKIPPED (\d+)/.exec(t)?.[1] || 0), skippedNames, log: lines.join('\n').trim().slice(-600) };
+  }
   return { done: false, ok: false, bytes: Number(/@@RUN (\d+)/.exec(t)?.[1] || 0), log: '' };
 }
 export const cleanHomeCmd = () => `rm -rf ${q(MOVE_DIR)}`;
