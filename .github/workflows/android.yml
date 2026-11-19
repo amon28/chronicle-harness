@@ -1,0 +1,82 @@
+name: Build Android APK
+
+on:
+  push:
+    paths-ignore: ['**.md', 'proxy/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# one APK per branch at a time: the newest commit wins, older builds are cancelled
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    # main always builds; another branch only when the commit message says [apk] (or run it by hand), to save Actions minutes
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[apk]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Fetch proot (in-app Linux)
+        run: scripts/fetch-proot.sh
+
+      - name: Build web app
+        run: |
+          npm ci
+          npx vite build
+          npx cap sync android
+
+      - name: Build APK
+        working-directory: android
+        env:
+          KEYSTORE_B64: ${{ secrets.OCM_KEYSTORE_BASE64 }}
+          OCM_KEYSTORE_PASSWORD: ${{ secrets.OCM_KEYSTORE_PASSWORD }}
+          OCM_KEY_ALIAS: ${{ secrets.OCM_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            export OCM_KEYSTORE="$RUNNER_TEMP/release.keystore"
+          else
+            echo "::warning::OCM_KEYSTORE_BASE64 secret not set – signing with a throwaway debug key (updates will need an uninstall). See README."
+          fi
+          chmod +x gradlew
+          # build number = minutes since 2026-01-01 UTC: always higher than any earlier build, CI or local (scripts/build-local.sh uses the same clock)
+          VC=$(( $(date +%s) / 60 - 29453760 ))
+          echo "VC=$VC" >> "$GITHUB_ENV"
+          ./gradlew assembleRelease -PversionCode=$VC
+          cp app/build/outputs/apk/release/app-release.apk ../chronicle.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chronicle-apk
+          path: chronicle.apk
+
+      - name: Publish to the "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Chronicle (latest build)
+          body: |
+            Build #${{ env.VC }} from ${{ github.sha }} (run ${{ github.run_number }}).
+            Open this page on your Android phone and tap **chronicle.apk** to install.
+
+            Changes:
+            ${{ github.event.head_commit.message && github.event.head_commit.message || 'Manual build' }}
+          prerelease: false
+          make_latest: true
+          files: chronicle.apk

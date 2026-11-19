@@ -1,0 +1,2195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#0b0b0c" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <title>Chronicle</title>
+</head>
+<body>
+  <div id="app">
+    <aside id="drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-head">
+        <span class="brand">chronicle</span>
+      </div>
+      <div class="mode-tabs" role="tablist">
+        <button class="mode-tab active" data-mode="chat" role="tab">💬 Chats <span class="mode-count"></span></button>
+        <button class="mode-tab" data-mode="rp" role="tab">🎭 Roleplay <span class="mode-count"></span></button>
+      </div>
+      <button id="drawer-new" class="drawer-new">+ New chat</button>
+      <div class="conv-search-row"><input id="conv-search" class="field conv-search search-field" type="search" placeholder="Search all chats" autocomplete="off" enterkeyhint="search" /><button id="new-folder" class="icon-btn small" aria-label="New folder" title="New folder">📁+</button></div>
+      <div id="conv-list" class="conv-list"></div>
+      <div class="drawer-foot">
+        <div id="go-usage" class="go-usage" hidden></div>
+        <div id="cc-usage-line" class="go-usage cc-usage" hidden></div>
+        <button id="open-wsm" class="ghost-btn block wsm-btn">📁 Workspace files</button>
+        <div class="row foot-btns">
+          <button id="open-personas" class="ghost-btn">🎭 Personas</button>
+          <button id="open-memory" class="ghost-btn">🧠 Memory</button>
+          <button id="open-settings" class="ghost-btn">⚙ Settings</button>
+        </div>
+      </div>
+    </aside>
+    <div id="scrim" class="scrim"></div>
+
+    <main class="main">
+      <header class="topbar">
+        <button id="menu-btn" class="icon-btn" aria-label="Menu">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <div class="head-center">
+          <button id="persona-btn" class="persona-btn" aria-label="Persona and system prompt for this chat">
+            <span id="persona-avatar"></span>
+          </button>
+          <div class="head-text">
+            <button id="persona-name-btn" class="persona-name"><span id="persona-name">Assistant</span></button>
+            <button id="model-btn" class="model-chip">
+              <span id="model-name">Select model</span>
+              <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg>
+            </button>
+          </div>
+        </div>
+        <button id="browser-view-btn" class="icon-btn" aria-label="See the assistant's browser" hidden>
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+        </button>
+        <button id="chat-more-btn" class="icon-btn" aria-label="Chat options">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg>
+        </button>
+      </header>
+      <div id="find-bar" class="find-bar" hidden>
+        <input id="find-input" class="field" type="search" placeholder="Search this chat" enterkeyhint="search" autocomplete="off" />
+        <span id="find-count" class="find-count"></span>
+        <button id="find-prev" class="icon-btn small" aria-label="Previous match"><svg viewBox="0 0 24 24"><path d="M7 14l5-5 5 5"/></svg></button>
+        <button id="find-next" class="icon-btn small" aria-label="Next match"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
+        <button id="find-close" class="icon-btn small" aria-label="Close search"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+
+      <div id="chat-bg" class="chat-bg" hidden></div>
+      <section id="messages" class="messages"></section>
+      <button id="jump-btn" class="jump-btn" aria-label="Scroll to the latest message" hidden>
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </button>
+
+      <button id="tts-pill" class="tts-pill" hidden>🔊 Reading… <b>⏹ Stop</b></button>
+      <footer class="composer-wrap">
+        <div id="edit-bar" class="edit-bar" hidden><span id="edit-bar-text"></span><button id="edit-cancel" class="act">Cancel</button></div>
+        <div id="jobs-bar" class="jobs-bar" hidden></div>
+        <div id="queue-bar" class="queue-bar" hidden></div>
+        <div id="mention-bar" class="mention-bar" hidden></div>
+        <div id="clip-offer" class="clip-offer" hidden>
+          <button id="clip-paste" class="ghost-btn small">📋 Paste the picture you copied</button>
+          <button id="clip-x" class="icon-btn small" aria-label="Dismiss">×</button>
+        </div>
+        <div id="quick-bar" class="quick-bar" hidden></div>
+        <div id="attachments" class="attachments"></div>
+        <div id="slash-menu" class="slash-menu" hidden></div>
+        <div class="composer">
+          <button id="attach-btn" class="icon-btn small" aria-label="Attach files">
+            <svg viewBox="0 0 24 24"><path d="M21 12.5l-8.5 8.5a5 5 0 01-7-7L14 5.5a3.3 3.3 0 014.7 4.7L10.2 18.7a1.7 1.7 0 01-2.4-2.4L15.5 8.6"/></svg>
+          </button>
+          <input id="file-input" type="file" accept="*/*" multiple hidden />
+          <div class="input-col">
+            <div id="compose-preview" class="compose-preview md" hidden></div>
+            <textarea id="input" rows="1" placeholder="Message…" enterkeyhint="send"></textarea>
+          </div>
+          <button id="mic-btn" class="icon-btn small mic-btn" aria-label="Speak your message" hidden>
+            <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg>
+          </button>
+          <button id="steer-btn" class="steer-btn" aria-label="Steer: use this now" title="Steer – the assistant takes this into account now" hidden>↪</button>
+          <button id="send-btn" class="send-btn" aria-label="Send">
+            <svg class="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            <svg class="i-goon" viewBox="0 0 24 24"><path d="M6 6l6 6-6 6M13 6l6 6-6 6"/></svg>
+            <svg class="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+          </button>
+        </div>
+        <div class="composer-meta">
+          <button id="preset-btn" class="meta-chip preset-chip" hidden>🎛 Standard</button>
+          <button id="tools-btn" class="meta-chip tools-chip">🛠 Tools</button>
+          <button id="files-btn" class="meta-chip" hidden>📁</button>
+          <button id="mode-btn" class="meta-chip" hidden></button>
+          <button id="ask-chip" class="meta-chip ask-chip" hidden>❓ Question waiting</button>
+          <button id="plan-btn" class="meta-chip plan-chip" hidden>📋 Plan mode</button>
+          <button id="goal-btn" class="meta-chip goal-chip" hidden></button>
+          <button id="todo-btn" class="meta-chip" hidden></button>
+          <button id="sched-btn" class="meta-chip" hidden></button>
+          <span id="mod-chips" class="mod-chips"></span>
+          <button id="effort-btn" class="meta-chip" hidden></button>
+          <button id="ctx-btn" class="meta-chip ctx-chip" hidden></button>
+          <span id="usage" class="usage"></span>
+        </div>
+      </footer>
+    </main>
+
+    <!-- Model sheet -->
+    <div id="model-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>Models</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <input id="model-search" class="field" placeholder="Search models…" autocomplete="off" />
+        <div id="model-filters" class="model-filters"></div>
+        <div id="model-list" class="model-list"></div>
+      </div>
+    </div>
+
+    <!-- Settings sheet: a menu of categories, each opens its own page. Changes save automatically. -->
+    <div id="settings-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card settings-card">
+        <div class="sheet-head">
+          <button id="set-back" class="icon-btn small" aria-label="Back" hidden><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+          <h2 id="set-title">Settings</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+
+        <nav id="set-nav" class="set-nav">
+          <input id="set-search" class="field set-search" type="search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" enterkeyhint="search" />
+          <div id="set-results" class="set-results" role="list" hidden></div>
+          <div class="set-group">Models &amp; chats</div>
+          <button class="set-item" data-page="account"><span class="set-ico">🔑</span><span class="set-txt"><b>Account &amp; models</b><small>OpenCode Go key, fallback model, other providers</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="chat"><span class="set-ico">💬</span><span class="set-txt"><b>Chats</b><small>Default assistant, thinking, context, compaction</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="shortcuts"><span class="set-ico">⚡</span><span class="set-txt"><b>Shortcuts &amp; recipes</b><small>Snippets, recipes, packs</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="memory"><span class="set-ico">🧠</span><span class="set-txt"><b>Memory</b><small>What the assistants remember about you</small></span><span class="chev">›</span></button>
+          <div class="set-group">Roleplay</div>
+          <button class="set-item" data-page="rp"><span class="set-ico">🎭</span><span class="set-txt"><b>Roleplay</b><small>Character, you, story memory, scene tracker, colours</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="rppreset"><span class="set-ico">🎛</span><span class="set-txt"><b>Roleplay presets</b><small>Presets with their own model, prompts and samplers; regex</small></span><span class="chev">›</span></button>
+          <div class="set-group">Agent</div>
+          <button class="set-item" data-page="tools"><span class="set-ico">🛠</span><span class="set-txt"><b>Tools &amp; agent</b><small>Web, Python, Linux, browser, permissions, skills, mods</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="connect"><span class="set-ico">🔌</span><span class="set-txt"><b>Connections</b><small>MCP servers, PC agents, automation, terminal</small></span><span class="chev">›</span></button>
+          <div class="set-group">App</div>
+          <button class="set-item" data-page="voice"><span class="set-ico">🔊</span><span class="set-txt"><b>Voice</b><small>Read aloud, dictation, voice mode</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="notify"><span class="set-ico">🔔</span><span class="set-txt"><b>Notifications &amp; background</b><small>Reply notifications, retries, characters writing first</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="look"><span class="set-ico">🎨</span><span class="set-txt"><b>Appearance</b><small>Theme, colours, backgrounds, text size, code boxes</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="prompts"><span class="set-ico">📝</span><span class="set-txt"><b>Prompts</b><small>Every instruction the app sends – edit any of them</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="data"><span class="set-ico">💾</span><span class="set-txt"><b>Data</b><small>Backup &amp; restore, storage, usage, updates</small></span><span class="chev">›</span></button>
+        </nav>
+
+        <!-- 🔑 Account & models -->
+        <!-- 🔑 Account & models -->
+        <section class="set-page" data-page="account" hidden>
+          <h3 class="section">OpenCode</h3>
+          <details id="ocg-box" class="git-box conn-card">
+            <summary><span class="b-ico">🔑</span><span class="b-txt"><b>OpenCode Go</b><small id="ocg-sum">API key, usage meters, Zen’s free models</small></span><span class="chev">›</span></summary>
+            <label class="label">OpenCode Go API key</label>
+            <div class="row">
+              <input id="api-key" class="field" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+              <button id="toggle-key" class="ghost-btn">Show</button>
+            </div>
+            <p class="hint">Get it at <a href="https://opencode.ai/auth" target="_blank" rel="noopener">opencode.ai</a> → Console → API Keys. Stored only on this device<span id="key-secure-note"></span>.</p>
+            <div class="row gap-sm">
+              <button id="test-conn" class="ghost-btn">Test connection</button>
+            </div>
+            <p id="settings-status" class="hint"></p>
+            <label class="label">Workspace ID <span class="dim">(for the usage meters)</span></label>
+            <input id="workspace-id" class="field" placeholder="paste your Console URL or workspace id" autocomplete="off" spellcheck="false" />
+            <p class="hint">Open <a href="https://opencode.ai/console" target="_blank" rel="noopener">opencode.ai/console</a>, copy the address from the browser bar and paste it here.</p>
+            <label class="toggle"><input id="pref-zenfree" type="checkbox" /> <span>Also show OpenCode Zen’s free models <span class="dim">(not part of Go – OpenCode currently refuses them outside its own apps)</span></span></label>
+          </details>
+          <h3 class="section">Offline</h3>
+          <details id="local-box" class="git-box conn-card">
+            <summary><span class="b-ico">📴</span><span class="b-txt"><b>On-device model</b><small id="local-sum">Experimental: a small model that works offline (~400 MB download)</small></span><span class="chev">›</span></summary>
+            <label class="toggle small"><input id="pref-local" type="checkbox" /> <span>Use the on-device model <span class="dim">(it appears in the model picker as OFFLINE)</span></span></label>
+            <p id="local-status" class="hint"></p>
+          </details>
+          <h3 class="section">Other providers</h3>
+          <button id="open-providers" class="ghost-btn block btn-2line"><span class="b-ico">🌐</span><span class="b-txt"><b>Custom endpoints</b><small>Claude with your own API key, Chub Soji, DeepSeek, any OpenAI-compatible API</small></span></button>
+          <h3 class="section">Claude Code (your subscription)</h3>
+          <details id="cc-box" class="git-box conn-card">
+            <summary><span class="b-ico">💻</span><span class="b-txt"><b>Claude Code in Linux</b><small>Your own Claude Code on this phone: install, sign in, start, usage</small></span><span class="chev">›</span></summary>
+            <p class="hint">Runs the Claude Code program you install in this app's 🐧 Linux, and its models appear in the model picker under “Claude Code (your subscription)” – pick one in any chat. It uses your own Claude plan. <b>You sign in inside Claude Code itself</b>, in the terminal – Chronicle has no sign-in for it and never reads, stores or backs up that sign-in. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Installs <code>@anthropic-ai/claude-code</code> and its ACP adapter <code>@agentclientprotocol/claude-agent-acp</code> with npm (Node 22 or newer). Start runs the adapter behind acp-bridge on 127.0.0.1 only, with a new secret each time that stays in the app's memory. Claude Code's own files (~/.claude/.credentials.json, ~/.claude.json) are hidden from Files › Linux, assistants in other chats are asked before touching them, and backups leave them out. It needs a lot of memory and space (about 400 MB) and runs slower than on a PC.</span></p>
+            <p id="cc-status" class="hint" role="status">…</p>
+            <ol class="hint cc-steps">
+              <li><b>Install</b> Node, Claude Code and its adapter in Linux. <button id="cc-install" class="ghost-btn" type="button">Install</button></li>
+              <li><b>Sign in – yourself, in Claude Code:</b> open the 🐧 terminal, type <code>claude</code> and follow its sign-in (it shows a link to open in your browser and a code to paste back). <button id="cc-terminal" class="ghost-btn" type="button">Open 🐧 terminal</button> <button id="cc-recheck" class="ghost-btn" type="button">Check again</button></li>
+              <li><b>Start</b> it in a folder in Linux, then chat. <input id="cc-cwd" class="field mono" value="/root" placeholder="/root" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Folder in Linux" /> <button id="cc-start" class="ghost-btn" type="button">Start</button> <button id="cc-stop" class="ghost-btn" type="button" hidden>Stop</button> <button id="cc-chat" class="ghost-btn" type="button" hidden>New chat</button></li>
+            </ol>
+            <p class="hint" id="cc-card-usage-row">Subscription usage <span class="dim">(as your Claude Code reports it)</span>: <button id="cc-card-usage" class="ghost-btn small" type="button">Show</button> <span id="cc-card-usage-sum"></span></p>
+            <pre id="cc-log" class="term-out cc-log" tabindex="0" hidden></pre>
+          </details>
+          <h3 class="section">All models</h3>
+          <label class="label">If a model stays busy, switch to <span class="dim">(after 2 automatic retries)</span></label>
+          <select id="pref-fallback" class="field"></select>
+          <div id="learned-box" class="row gap-sm wrap" hidden><span id="learned-sum" class="hint"></span><button id="learned-forget" class="ghost-btn small">Forget</button></div>
+          <div id="proxy-block">
+            <label class="label">Proxy URL <span class="dim">(web/iPhone only)</span></label>
+            <input id="proxy-url" class="field" placeholder="https://your-worker.workers.dev" autocomplete="off" spellcheck="false" />
+            <p class="hint">Browsers can't call OpenCode Go directly (no CORS). The Android app doesn't need this.</p>
+          </div>
+        </section>
+
+        <!-- 💬 Chats -->
+        <section class="set-page" data-page="chat" hidden>
+          <label class="label">Default assistant for new chats</label>
+          <div class="row">
+            <select id="pref-persona" class="field"></select>
+            <button id="settings-personas" class="ghost-btn">Personas</button>
+          </div>
+          <label class="label">Thinking (reasoning models)</label>
+          <select id="pref-thinking" class="field">
+            <option value="stream">Show while generating, then collapse</option>
+            <option value="collapsed">Always collapsed</option>
+            <option value="hidden">Hidden</option>
+          </select>
+        <label class="label">Context limit <span class="dim">(sliding window; chats and personas can override it)</span></label>
+          <select id="pref-ctx-other" class="field"></select>
+          <label class="toggle"><input id="pref-autocompact" type="checkbox" /> <span>Auto-compact long chats without a limit (summarize older messages). Roleplays never compact: they slide automatically.</span></label>
+          <div class="row gap-sm compact-row">
+            <label class="hint inline">Compact when the context reaches <select id="pref-compact-at" class="field"></select></label>
+          </div>
+          <div class="row gap-sm compact-row">
+            <label class="hint inline">For <b id="compact-model-name">this model</b> <select id="pref-compact-model" class="field"></select></label>
+          </div>
+          <div class="row gap-sm compact-row">
+            <label class="hint inline">Compaction style <select id="pref-compact-style" class="field"></select></label>
+          </div>
+          <p class="hint">Structured: the summary is taken out of the messages (what you wrote, files, commands, errors, to-dos) – instant, works offline, costs nothing. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>The messages stay in the chat and the assistant can read them back. Roleplays always use the model summary.</span></p>
+          <p class="hint">Type <code>/compact</code> to compact now, or <code>/compact keep the API decisions</code> to say what the summary must keep.</p>
+          <label class="toggle"><input id="pref-autotitle" type="checkbox" /> <span>Name new chats automatically</span></label>
+          <label class="toggle"><input id="pref-enter" type="checkbox" /> <span>Enter key sends the message</span></label>
+          <label class="toggle"><input id="pref-stats" type="checkbox" /> <span>Show tokens &amp; cost under replies</span></label>
+          <label class="toggle"><input id="pref-autocontinue" type="checkbox" /> <span>Continue automatically when a reply hits its length limit <span class="dim">(up to 2 times)</span></span></label>
+          <label class="toggle"><input id="pref-times" type="checkbox" /> <span>Show message times</span></label>
+        </section>
+
+        <!-- ⚡ Shortcuts & recipes -->
+        <section class="set-page" data-page="shortcuts" hidden>
+          <p class="hint">Type <b>/</b> at the start of a message for snippets, recipes and commands.</p>
+          <button id="settings-snippets" class="ghost-btn block btn-2line"><span class="b-ico">⚡</span><span class="b-txt"><b>Snippets</b><small>Short prompts you insert with /name</small></span></button>
+          <button id="settings-recipes" class="ghost-btn block btn-2line"><span class="b-ico">🧪</span><span class="b-txt"><b>Recipes</b><small>Workflows of several steps, with parameters and a schedule</small></span></button>
+          <button id="settings-packs" class="ghost-btn block btn-2line"><span class="b-ico">📦</span><span class="b-txt"><b>Packs</b><small>Install a set of snippets, recipes, skills, MCP servers and personas at once</small></span></button>
+        </section>
+
+        <!-- 🎭 Roleplay -->
+        <section class="set-page" data-page="rp" hidden>
+          <label class="label">Default character for new roleplays</label>
+          <select id="pref-rp-persona" class="field"></select>
+          <label class="label">You <span class="dim">({{user}} and {{persona}})</span></label>
+          <div class="row">
+            <div id="me-summary" class="field me-summary"></div>
+            <button id="open-me" class="ghost-btn">👤 Personas</button>
+          </div>
+          <label class="label">Context limit for roleplays <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>E.g. 30K even if the model allows 1M; “Model maximum” = automatic, just under the limit.</span></label>
+          <select id="pref-ctx-rp" class="field"></select>
+          <h3 class="section">📜 Story memory</h3>
+          <label class="toggle"><input id="pref-story" type="checkbox" /> <span>Record important events of each roleplay</span></label>
+          <div class="row gap-sm lb-settings">
+            <label class="hint inline">Update every <select id="pref-story-every" class="field"><option value="8">8</option><option value="12">12</option><option value="16">16</option><option value="24">24</option><option value="40">40</option></select> messages</label>
+            <label class="hint inline">using <select id="pref-story-model" class="field"><option value="auto">a fast model</option><option value="chat">the chat's model</option></select> <button type="button" class="info-btn" data-info="fast-model" aria-label="Which model is this?" aria-expanded="false">i</button></label>
+          </div>
+          <h3 class="section">Behaviour</h3>
+          <label class="toggle"><input id="pref-rp-choices" type="checkbox" /> <span>Offer choices after each reply <span class="dim">(2–4 buttons for what you do next; tap one to send it)</span></span></label>
+          <label class="toggle"><input id="pref-rp-noemoji" type="checkbox" /> <span>Ban emojis <span class="dim">(asked not to use them, and stripped from replies)</span></span></label>
+          <label class="toggle"><input id="pref-rp-fixmarks" type="checkbox" /> <span>Close forgotten *asterisks* and "quotes" <span class="dim">(when a reply leaves one open)</span></span></label>
+          <label class="toggle"><input id="pref-rp-trim" type="checkbox" /> <span>Trim incomplete sentences at the end of replies</span></label>
+          <label class="toggle"><input id="pref-rp-recall" type="checkbox" /> <span>Recall earlier moments <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Long stories: older messages that fit the scene come back into the prompt – by the names and things mentioned, and by meaning with 🧠 Smart memory.</span></span></label>
+          <label class="toggle"><input id="pref-rp-lore" type="checkbox" /> <span>Use lorebooks <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Scan depth, token budget, recursion &amp; whole words are set per lorebook in 📚 Lorebooks.</span></span></label>
+          <h3 class="section">📊 Scene tracker</h3>
+          <label class="toggle"><input id="pref-tracker" type="checkbox" /> <span>Keep a scene sheet in new roleplays <span class="dim">(time, place, clothes, mood…)</span> <button type="button" class="info-btn" data-info="tracker" aria-label="About the scene sheet" aria-expanded="false">i</button></span></label>
+          <label class="label">Fields <span class="dim">(comma-separated; also usable as {{getvar::Location}})</span></label>
+          <input id="pref-tracker-fields" class="field" placeholder="Time &amp; date, Location, Weather, What each character wears, Mood of each character, Notable items, Current goal" />
+          <h3 class="section">Text colours</h3>
+          <label class="toggle"><input id="pref-rp-colors" type="checkbox" /> <span>Colour roleplay text</span></label>
+          <div class="row gap-sm rp-color-row">
+            <label class="rp-color"><input id="pref-rp-action" type="color" /> <span><em>*actions*</em></span></label>
+            <label class="rp-color"><input id="pref-rp-quote" type="color" /> <span>"dialogue"</span></label>
+            <button id="rp-colors-reset" class="ghost-btn small">Reset</button>
+          </div>
+          <p id="rp-color-preview" class="rp-preview md"></p>
+          <h3 class="section">Other</h3>
+          <label class="toggle"><input id="pref-tools-rp" type="checkbox" /> <span>🛠 Tools on in new roleplays</span></label>
+        </section>
+
+        <!-- 🎛 Roleplay prompts & preset -->
+        <section class="set-page" data-page="rppreset" hidden>
+          <div class="rp-preset-bar" id="rp-preset-bar">
+            <label class="label">Preset <span class="dim">(everything on this page – model, prompts, samplers – is saved in it)</span></label>
+            <select id="rp-preset-sel" class="field"></select>
+            <label class="toggle small"><input id="rp-preset-default" type="checkbox" /> <span>Default for roleplays <span class="dim">(a chat can pick another in its menu)</span></span></label>
+            <div class="row gap-sm wrap">
+              <select id="rp-preset-new" class="field small" aria-label="New preset"><option value="">＋ New preset…</option></select>
+              <button id="rp-preset-dup" class="ghost-btn small" type="button">Duplicate</button>
+              <button id="rp-preset-rename" class="ghost-btn small" type="button">Rename</button>
+              <button id="rp-preset-del" class="ghost-btn small danger" type="button">Delete</button>
+              <button id="rp-preset-export" class="ghost-btn small" type="button">Export</button>
+              <button id="rp-preset-import" class="ghost-btn small" type="button">Import</button>
+              <input id="rp-preset-file" type="file" accept=".json,application/json" hidden />
+            </div>
+            <label class="label">Model <span class="dim">(for roleplays using this preset)</span></label>
+            <select id="rp-preset-model" class="field"></select>
+            <div id="rp-preset-effort-row" hidden>
+              <label class="label">Reasoning effort</label>
+              <select id="rp-preset-effort" class="field"></select>
+            </div>
+            <p class="hint" id="rp-preset-standard-hint">Standard is the one every roleplay used before presets: it keeps the model you pick in the chat.</p>
+          </div>
+          <label class="label">Pre-history prompt <span class="dim">(main prompt, sent first; empty = the default shown)</span></label>
+          <textarea id="pref-rp-main" class="field mono" rows="4"></textarea>
+          <button id="rp-main-default" class="ghost-btn small">Fill in the default to edit it</button>
+          <label class="label">Post-history instructions <span class="dim">(sent after the chat, last)</span></label>
+          <textarea id="pref-phi" class="field mono" rows="2" placeholder="e.g. Write 2–4 paragraphs. Never reply for {{user}}."></textarea>
+          <p class="hint">A card's own prompts replace these; <code>{{original}}</code> inside the card inserts them. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Edit a card's prompts in 🎭 Personas → the character → Advanced.</span></p>
+          <p class="hint">A character's or a chat's own sampler settings win over the preset's.</p>
+          <details class="pc-adv sampler-box" id="rp-samplers"><summary>Samplers <span class="dim">(temperature, max new tokens, penalties, stop strings…)</span></summary></details>
+          <label class="label">Prompt note <span class="dim">(inserted into the chat at a depth, every roleplay)</span></label>
+          <textarea id="pref-rp-note" class="field mono" rows="3" placeholder="e.g. When {{user}} addresses another character by name, that character responds in their own voice."></textarea>
+          <div class="row gap-sm">
+            <label class="hint inline">Depth <input id="pref-rp-note-depth" class="field num" type="number" min="0" max="50" /></label>
+            <label class="hint inline">As <select id="pref-rp-note-role" class="field"><option value="system">system</option><option value="user">user</option><option value="assistant">character</option></select></label>
+          </div>
+          <label class="label">Assistant prefill <span class="dim">(the reply is forced to start with this – some APIs reject it)</span></label>
+          <input id="pref-rp-prefill" class="field" placeholder="e.g. *" />
+          <label class="label">Impersonation prompt <span class="dim">(✍️ Write my next message)</span></label>
+          <textarea id="pref-rp-imp" class="field mono" rows="3"></textarea>
+          <label class="toggle"><input id="pref-rp-names" type="checkbox" /> <span>Include names <span class="dim">(prefix messages with “Name:”)</span></span></label>
+          <button id="open-regex" class="ghost-btn block btn-2line"><span class="b-ico">🔁</span><span class="b-txt"><b>Regex scripts</b><small>Find & replace on messages</small></span></button>
+        </section>
+
+        <!-- 🧠 Memory -->
+        <section class="set-page" data-page="memory" hidden>
+          <label class="toggle"><input id="pref-memory" type="checkbox" /> <span>Use memories in chats</span></label>
+          <label class="toggle"><input id="pref-learn" type="checkbox" /> <span>Learn about me from conversations</span></label>
+          <label class="label" for="pref-learn-every">Learn about me</label>
+          <select id="pref-learn-every" class="field"><option value="1">After every reply</option><option value="3">Every 3 messages</option><option value="6">Every 6 messages</option></select>
+          <p class="hint">Chats with assistants: one request reads your messages since the last check. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>“Remember…”, “forget…” and “my name is…” are learned right away. Roleplays learn after every reply.</span></p>
+          <label class="toggle"><input id="pref-episodes" type="checkbox" /> <span>Let each persona remember what happened <span class="dim">(their own notes from past chats, also in groups)</span></span></label>
+          <label class="label">Model used for learning</label>
+          <select id="pref-learn-model" class="field"></select>
+          <p class="hint">A small request checks your messages for things worth remembering. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Auto uses DeepSeek V4.1 Flash (needs the Global region enabled in the OpenCode Console → Settings → Privacy) and falls back to GLM-5.3-Flash.</span></p>
+          <label class="toggle"><input id="pref-cross-recall" type="checkbox" /> <span>Recall my past messages from other chats <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Assistant chats: up to 3 of your own messages from your other chats with the same persona that fit what you are talking about – needs 🧠 Smart memory; incognito and roleplay chats are never searched.</span></span></label>
+          <button id="settings-memory" class="ghost-btn block">🧠 View &amp; edit memories</button>
+        </section>
+
+        <!-- 🛠 Tools & agent -->
+        <section class="set-page" data-page="tools" hidden>
+          <h3 class="section">Tools</h3>
+          <label class="toggle"><input id="pref-tools" type="checkbox" /> <span>Tools on by default in new chats</span></label>
+          <label class="toggle"><input id="pref-tool-web" type="checkbox" /> <span>🔍 Web search &amp; reading pages</span></label>
+          <label class="toggle"><input id="pref-tool-python" type="checkbox" /> <span>🐍 Python sandbox<small class="t-hint">Runs on the phone</small></span></label>
+          <label class="label" for="pref-search">Web search</label>
+          <select id="pref-search" class="field">
+            <option value="auto">Auto – Bing, Brave, Google &amp; DuckDuckGo from your phone, Exa as fallback</option>
+            <option value="engines">Search engines only (from your phone)</option>
+            <option value="exa">Exa only</option>
+            <option value="both">Both, merged (most thorough, slower)</option>
+          </select>
+          <label class="label" for="exa-key">Exa API key <span class="dim">(optional, for heavier web search)</span></label>
+          <input id="exa-key" class="field" type="password" placeholder="works without a key" autocomplete="off" spellcheck="false" />
+          <label class="label" for="microlink-key">Screenshot service key <span class="dim">(optional – Microlink; without it ~50 screenshots a day)</span></label>
+          <input id="microlink-key" class="field" type="password" placeholder="works without a key" autocomplete="off" spellcheck="false" />
+          <label class="label" for="pref-max-steps">Max tool steps per reply</label>
+          <select id="pref-max-steps" class="field">
+            <option value="10">10</option>
+            <option value="20">20</option>
+            <option value="40">40</option>
+            <option value="80">80</option>
+          </select>
+          <h3 class="section">Phone</h3>
+          <label class="toggle" id="pref-tool-intents-row"><input id="pref-tool-intents" type="checkbox" /> <span>📲 Other apps<small class="t-hint">Open a page, the dialer, a text or email draft, the map, a calendar event, an alarm or timer – it asks first, and you finish it there</small></span></label>
+          <label class="toggle" id="pref-tool-device-row"><input id="pref-tool-device" type="checkbox" /> <span>🗓 Phone data<small class="t-hint">Read your calendar and add events, look up contacts, see roughly where you are, find places nearby with a small map (OpenStreetMap) – it asks in each chat first, and Android asks once</small></span></label>
+          <label class="toggle" id="pref-tool-phonectl-row"><input id="pref-tool-phonectl" type="checkbox" /> <span>📶 Phone status &amp; controls<small class="t-hint">Battery, storage and network; after asking in the chat: Wi-Fi names, flashlight, volume, media buttons, clipboard, or a photo from you</small></span></label>
+          <button id="open-private" class="ghost-btn block btn-2line" hidden><span class="b-ico">🔒</span><span class="b-txt"><b>Sensitive phone access</b><small id="open-private-sum">Notifications, texts &amp; calls, place triggers – all off</small></span></button>
+          <details class="pc-adv" id="osm-box">
+            <summary>Maps &amp; places <span class="dim">(advanced: the OpenStreetMap services used)</span></summary>
+            <div class="hint">These public OpenStreetMap services are free and shared. Chronicle only calls them when the assistant looks a place up for you or you look at a map, keeps map tiles for a week, and stops at a limit per hour. Leave a field empty for the default.</div>
+            <label class="label" for="osm-tiles">Map tiles address <span class="dim">(with {z}, {x}, {y})</span></label>
+            <input id="osm-tiles" class="field" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <label class="label" for="osm-overpass">Place search (Overpass) address</label>
+            <input id="osm-overpass" class="field" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://overpass-api.de/api/interpreter" />
+            <label class="label" for="osm-photon">Address search (Photon) address</label>
+            <input id="osm-photon" class="field" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://photon.komoot.io/api" />
+            <div class="row gap-sm wrap"><button class="ghost-btn small" id="osm-reset" type="button">Use the defaults</button><button class="ghost-btn small" id="osm-clear-tiles" type="button">Clear saved map tiles</button></div>
+          </details>
+          <label class="toggle" id="pref-tool-phone-row"><input id="pref-tool-phone" type="checkbox" /> <span>📱 Phone folders<small class="t-hint">Read and save files in a folder you pick</small></span></label>
+          <label class="label" id="pref-agent-mode-row" for="pref-agent-mode">What may the assistant do in a phone folder? <span class="dim">(default for new chats – each chat can change it)</span></label>
+          <select id="pref-agent-mode" class="field">
+            <option value="ask">🛡 Review – I accept or reject each change after it finishes</option>
+            <option value="auto">⚡ Auto – apply changes at once (you can undo)</option>
+            <option value="readonly">👁 Read-only – look but never change</option>
+          </select>
+          <h3 class="section">Agent behaviour</h3>
+          <label class="toggle"><input id="pref-shell" type="checkbox" /> <span>Run commands in the built-in Linux<small class="t-hint">Android app – install it under Linux terminal first</small></span></label>
+          <label class="toggle"><input id="pref-browser" type="checkbox" /> <span>Open pages, click and type<small class="t-hint">Shares cookies with the in-app Chub/BotBooru browsers</small></span></label>
+          <label class="toggle"><input id="pref-preview" type="checkbox" /> <span>Look at the web pages it writes<small class="t-hint">Android app – screenshots, then improve</small></span></label>
+          <label class="toggle"><input id="pref-create" type="checkbox" /> <span>Create characters, lorebooks and personas – and snippets, recipes and packs<small class="t-hint">Always asks first</small></span></label>
+          <label class="toggle"><input id="pref-delegate" type="checkbox" /> <span>Use a helper model</span></label>
+          <label class="label" for="pref-helper">Helper model</label>
+          <select id="pref-helper" class="field"></select>
+          <label class="toggle"><input id="pref-lazy-tools" type="checkbox" /> <span>Load seldom-used tools only when needed<small class="t-hint">Calendar, contacts, places, phone controls, the character makers, scheduling, deep research and the like are sent as names until the assistant loads one – about 9K tokens off every request. Turn off to send them all every time.</small></span></label>
+          <label class="label">Lighter tool set <span class="dim">(browser, page previews, scripts and helpers wait until needed)</span></label>
+          <select id="pref-lean-tools" class="field"><option value="auto">Auto – for small models (on-device, 14B or less, mini/nano/lite)</option><option value="on">Always</option><option value="off">Never</option></select>
+          <label class="toggle"><input id="pref-wrapup" type="checkbox" /> <span>Sum up at the step limit<small class="t-hint">When an assistant uses all its tool steps, one last request (no tools) says what is done, what is left and the next step</small></span></label>
+          <label class="toggle"><input id="pref-cache-hour" type="checkbox" /> <span>Keep Claude’s prompt cache for an hour<small class="t-hint">Claude with your own API key: the cache normally lasts 5 minutes. An hour costs more to write, saves more when you come back later (schedules, long goals)</small></span></label>
+          <label class="toggle"><input id="pref-claudecode" type="checkbox" /> <span>💻 Let models hand tasks to Claude Code<small class="t-hint">Your Claude Code in Linux, once installed and signed in. Uses your Claude plan's limits – for big coding jobs. Off by default.</small></span></label>
+          <label class="toggle"><input id="pref-check-work" type="checkbox" /> <span>Check work before finishing (an agent that changed files and ran nothing after is sent back once to check them)</span></label>
+          <label class="toggle"><input id="pref-shell-guard" type="checkbox" /> <span>Ask before a dangerous shell command (rm -rf outside the workspace, deleting phone files, git reset --hard, force-push…), even in ⚡ Auto</span></label>
+          <label class="toggle"><input id="pref-bypass-default" type="checkbox" /> <span>⚡ Bypass permissions in new chats<small class="t-hint">Tools run without asking you first. Off by default; asks once and says what still asks. Each chat can turn it off.</small></span></label>
+          <label class="label" for="pref-advisor">Advisor model <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>A stronger model the agent may ask when stuck – up to 3 times per message.</span></label>
+          <select id="pref-advisor" class="field"></select>
+          <h3 class="section">Extensions</h3>
+          <div class="btn-grid">
+            <button id="open-skills" class="ghost-btn">🧰 Saved tools</button>
+            <button id="open-askills" class="ghost-btn">📚 Skills</button>
+            <button id="open-mods" class="ghost-btn">🧩 Mods</button>
+            <button id="open-hooks" class="ghost-btn">🪝 Hooks</button>
+            <button id="open-perms" class="ghost-btn">🔐 Permissions</button>
+          </div>
+          <p class="hint">Web search works like the opencode CLI's (no key needed). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Python runs in a WebAssembly sandbox that only sees the chat's files; the first run downloads ~12 MB once.</span></p>
+        </section>
+
+        <!-- 🔌 Connections -->
+        <section class="set-page" data-page="connect" hidden>
+          <p class="hint">Where the assistant reaches beyond this chat: tool servers, agents on your computer, other apps, and the built-in Linux.</p>
+          <button id="open-mcp" class="ghost-btn block btn-2line"><span class="b-ico">🔌</span><span class="b-txt"><b>MCP servers</b><small>Add tool servers by address or command, sign in, browse the registry</small></span></button>
+          <button id="open-terminal" class="ghost-btn block btn-2line"><span class="b-ico">💻</span><span class="b-txt"><b>Linux terminal</b><small>The built-in Alpine Linux: install, run commands, full terminal</small></span></button>
+          <details id="gh-box" class="git-box conn-card">
+            <summary><span class="b-ico"><svg class="gh-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.7 1.6.2 2.9.1 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.1.9 2.2v3.3c0 .3.1.7.8.6A12 12 0 0 0 12 .3"/></svg></span><span class="b-txt"><b>GitHub</b><small id="gh-sum">Not connected – git and gh in the Linux shell</small></span><span class="chev">›</span></summary>
+            <p class="hint">Lets the Linux shell (<code>git clone / pull / push</code>, <code>gh</code>) and the chat's Git history reach your repos. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Being signed in on github.com in the assistant's browser is not enough: git needs a token, and this gets one.</span></p>
+            <p id="gh-status" class="hint"></p>
+            <div id="gh-code-box" class="gh-code-box" hidden>
+              <p class="hint">Enter this code on GitHub, approve, then come back:</p>
+              <div class="row gap-sm wrap"><code id="gh-code" class="gh-code"></code><button id="gh-code-copy" class="ghost-btn small">📋 Copy</button><button id="gh-code-open" class="ghost-btn small">🌐 Open GitHub</button><button id="gh-code-cancel" class="ghost-btn small">Cancel</button></div>
+              <p id="gh-wait" class="hint">Waiting for you to approve…</p>
+            </div>
+            <div class="row gap-sm wrap">
+              <button id="gh-signin" class="primary-btn">Sign in with GitHub</button>
+              <button id="gh-test" class="ghost-btn" hidden>🧪 Test</button>
+              <button id="gh-signout" class="ghost-btn" hidden>Sign out</button>
+            </div>
+            <div class="row gap-sm" id="gh-check-row" hidden>
+              <input id="gh-check-repo" class="field mono" placeholder="Repo to test, e.g. my-org/game" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Repo to test" />
+            </div>
+            <details class="sub-details">
+              <summary>Paste a token instead</summary>
+              <p class="hint">A fine-grained token (GitHub › Settings › Developer settings › Fine-grained tokens) limited to the repos you choose, with "Contents: read and write" and an expiry date. For an organisation repo choose the organisation as <b>Resource owner</b> (the organisation may have to approve the token). Only that repo is reachable, and it stops working on its date.</p>
+              <div class="row gap-sm"><input id="gh-pat" class="field mono" type="password" placeholder="github_pat_…" autocomplete="off" /><button id="gh-pat-save" class="ghost-btn">Use</button></div>
+            </details>
+            <label class="label">Commit as <span class="dim">(filled in from your GitHub account)</span></label>
+            <div class="row gap-sm"><input id="gh-name" class="field" placeholder="Name" autocomplete="off" /><input id="gh-email" class="field" placeholder="Email" autocomplete="off" /></div>
+            <details class="sub-details" id="gh-ssh-box">
+              <summary>SSH key (last resort)</summary>
+              <p class="hint warn-text">An SSH key on your GitHub account reaches <b>every repo you can push to</b> and never expires – GitHub cannot narrow it. Use it only when a GitHub App or a fine-grained token is not possible (an organisation that will not approve them), and delete it on GitHub when you are done.</p>
+              <p class="hint">What the app does to keep it narrow: the key is made on this phone and kept in the app's secure store (never in backups); it is put into the shell only while it is switched on, and taken out when the time runs out; git uses it only for the repos listed here (this decides when git picks the key – on GitHub the key still reaches every repo you can push to); GitHub's server is checked against its published key; and each push asks you first. What it cannot prevent: a program running in the shell while the key is on could copy it – keep the time short.</p>
+              <p id="gh-ssh-status" class="hint"></p>
+              <div class="row gap-sm wrap">
+                <button id="gh-ssh-make" class="ghost-btn small" type="button">Make a key</button>
+                <button id="gh-ssh-copy" class="ghost-btn small" type="button" hidden>📋 Copy public key</button>
+                <button id="gh-ssh-add" class="ghost-btn small" type="button" hidden>🌐 Add it on GitHub</button>
+                <button id="gh-ssh-delete" class="ghost-btn small danger" type="button" hidden>Delete key</button>
+              </div>
+              <div id="gh-ssh-use" hidden>
+                <label class="label" for="gh-ssh-repos">Only for these repos <span class="dim">(owner/name, one per line)</span></label>
+                <textarea id="gh-ssh-repos" class="field mono" rows="2" placeholder="my-org/game" autocapitalize="off" spellcheck="false"></textarea>
+                <label class="label" for="gh-ssh-for">Switched on</label>
+                <select id="gh-ssh-for" class="field">
+                  <option value="0">Off</option>
+                  <option value="60">For 1 hour</option>
+                  <option value="240">For 4 hours</option>
+                  <option value="1440">For 24 hours</option>
+                  <option value="-1">Until I switch it off</option>
+                </select>
+                <label class="toggle"><input id="gh-ssh-ask" type="checkbox" checked /> <span>Ask me before every push with it</span></label>
+              </div>
+            </details>
+            <details class="sub-details">
+              <summary>Use a GitHub App (recommended – needed for most organisation repos)</summary>
+              <p class="hint">A GitHub App reaches only the repos you install it on, and its sign-in runs out after 8 hours and renews itself. Organisations that refuse OAuth Apps usually allow it. Once:</p>
+              <ol class="hint">
+                <li>GitHub › Settings › Developer settings › <b>GitHub Apps</b> › New GitHub App. Any name and homepage URL; untick Webhook; tick <b>Enable Device Flow</b>.</li>
+                <li>Repository permissions: <b>Contents: Read and write</b> (and Pull requests / Issues if you want those). Account permissions: Email addresses: Read. Nothing else.</li>
+                <li>Create it, then <b>Install App</b> › your organisation (or account) › <b>Only select repositories</b> › pick the repos. If you are not an owner, GitHub sends the owner a request to approve.</li>
+                <li>Copy the app's <b>Client ID</b> here and tap Sign in with GitHub. The ID is not a secret.</li>
+              </ol>
+              <p class="hint">An OAuth App's Client ID works here too, but it reaches all your repos and organisations can refuse it.</p>
+              <input id="gh-client-id" class="field mono" placeholder="Client ID (Ov23li…)" autocomplete="off" />
+            </details>
+            <p class="hint">The sign-in can do what it was given, and any command the assistant runs in the shell can use it – so give it only the repos needed. The assistant is told never to make SSH keys or other credentials itself, and the shell asks you first if it tries. Outputs show <code>[GitHub token]</code> instead of the token.</p>
+          </details>
+          <button id="open-pc" class="ghost-btn block btn-2line"><span class="b-ico">🖥</span><span class="b-txt"><b>OpenCode on my PC</b><small>Pair with opencode serve on your computer</small></span></button>
+          <details id="acp-box" class="git-box conn-card">
+            <summary><span class="b-ico">🖥</span><span class="b-txt"><b>PC agents</b><small>Claude Code, Gemini CLI, Goose… on your computer, over ACP</small></span><span class="chev">›</span></summary>
+            <p class="hint">Chat with an agent that runs on your computer and works on its files. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>On the PC run <code>python3 acp-bridge.py -- &lt;the agent's ACP command&gt;</code> (e.g. Claude Code's adapter <code>npx -y @agentclientprotocol/claude-agent-acp</code> – command <code>claude-agent-acp</code>; older versions were <code>@zed-industries/claude-agent-acp</code> and <code>@zed-industries/claude-code-acp</code> – or <code>gemini --experimental-acp</code>), then add the address and secret it prints. Its permission questions come here. Use it on your own network or a VPN like Tailscale.</span></p>
+            <div id="acp-list" class="persona-list"></div>
+            <div class="row gap-sm wrap">
+              <input id="acp-name" class="field" placeholder="Name, e.g. Claude Code on my PC" />
+              <input id="acp-url" class="field" placeholder="http://192.168.1.20:8765" autocomplete="off" spellcheck="false" />
+              <input id="acp-secret" class="field" type="password" placeholder="secret" autocomplete="off" />
+              <button id="acp-add" class="ghost-btn">+ Add</button>
+            </div>
+            <a class="hint" href="https://github.com/amon28/chronicle-harness/blob/main/scripts/acp-bridge.py" target="_blank" rel="noopener">Get acp-bridge.py ↗</a>
+          </details>
+          <details id="auto-box" class="git-box conn-card">
+            <summary><span class="b-ico">🤖</span><span class="b-txt"><b>Automation</b><small>Let Tasker, MacroDroid… run prompts and recipes here</small></span><span class="chev">›</span></summary>
+            <p class="hint">Let another app run a prompt or a recipe here and get the reply back. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Each app gets its own token; a link without one runs nothing.<br>Open <code>chronicle://run?token=…&amp;prompt=…</code> (Tasker: Send Intent, action <code>android.intent.action.VIEW</code>, data = the link). Optional: <code>recipe=name&amp;args=…</code> instead of prompt, <code>persona=…</code>, <code>id=…</code>. The reply comes back as the broadcast <code>dev.chronicle.app.RESULT</code> (extras <code>text</code>, <code>ok</code>, <code>error</code>, <code>request_id</code>, <code>chat_id</code>) – only to that app when it is Tasker or MacroDroid, or to <code>reply_package=…</code>.</span></p>
+            <div id="auto-list" class="persona-list"></div>
+            <button id="auto-add" class="ghost-btn">+ Give an app access</button>
+          </details>
+        </section>
+
+        <!-- 🔊 Voice -->
+        <section class="set-page" data-page="voice" hidden>
+          <label class="toggle"><input id="pref-tts-auto" type="checkbox" /> <span>Read new replies aloud automatically</span></label>
+          <label class="toggle"><input id="pref-tts-actions" type="checkbox" /> <span>Skip *actions* <span class="dim">(the text between single asterisks)</span></span></label>
+          <label class="toggle"><input id="pref-tts-dialogue" type="checkbox" /> <span>In roleplay, read only the dialogue <span class="dim">(the “quoted” parts)</span></span></label>
+          <label class="hint inline">Speed <select id="pref-tts-rate" class="field"><option value="0.8">Slow</option><option value="1">Normal</option><option value="1.2">Fast</option><option value="1.5">Faster</option></select></label>
+          <p class="hint">Read any reply from its ⋯ menu; tap 🎤 in the message box to dictate. Uses your phone's voice and speech recognition.</p>
+          <h3 class="section">🎙 Better voices &amp; cloned voices</h3>
+          <p class="hint">The voice comes from a text-to-speech app (an "engine") on your phone. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Install a better one – or a voice-cloning one such as CloneTTS – and pick it here. This is the voice for every assistant and character that has no voice of its own (set those in 🎭 Personas › a persona › 🔊 Voice).</span></p>
+          <label class="label">Engine</label>
+          <select id="vs-engine" class="field"></select>
+          <label class="label">Voice</label>
+          <select id="vs-voice" class="field"></select>
+          <div class="row gap-sm wrap">
+            <button id="vs-test" class="ghost-btn small">▶ Test this voice</button>
+            <button id="vs-install" class="ghost-btn small">⬇ Get voices / engines</button>
+          </div>
+          <p id="vs-status" class="hint"></p>
+          <p class="hint">Hold 🎤 (or type <code>/voice</code>) for voice mode: a hands-free conversation. Each character can have its own voice in 🎭 Personas.</p>
+        </section>
+
+        <!-- 🔔 Notifications & background -->
+        <section class="set-page" data-page="notify" hidden>
+          <button id="open-sched" class="ghost-btn block btn-2line"><span class="b-ico">⏰</span><span class="b-txt"><b>Scheduled tasks</b><small id="open-sched-sum">What the assistant will do later, in every chat</small></span></button>
+          <label class="toggle"><input id="pref-notify" type="checkbox" /> <span>Notify me when a reply finishes in the background <span class="dim">(Android)</span></span></label>
+          <label class="toggle"><input id="pref-auto-resume" type="checkbox" /> <span>Try again when my OpenCode Go allowance resets <span class="dim">(after a usage-limit error)</span></span></label>
+          <label class="toggle"><input id="pref-proactive" type="checkbox" /> <span>Characters can message me first <span class="dim">(only in chats where you allow it – chat sheet › “Can write first”)</span></span></label>
+          <div id="proactive-opts" class="row gap-sm wrap">
+            <label class="dim">Quiet hours <input id="pref-quiet-from" type="time" class="field small" /> to <input id="pref-quiet-to" type="time" class="field small" /></label>
+            <label class="dim">At most <select id="pref-proactive-cap" class="field small"><option value="1">1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option></select> a day</label>
+          </div>
+          <p class="hint" id="battery-hint" hidden>Android's battery saver can pause long agent runs and delay scheduled checks while the phone sleeps. <button id="battery-allow" class="link-btn" type="button">Run without battery limits</button></p>
+          <p class="hint" id="exact-hint" hidden>Android may deliver these a few minutes late while the phone sleeps. <button id="exact-allow" class="link-btn" type="button">Allow exact timing</button></p>
+        </section>
+
+        <!-- 🎨 Appearance -->
+        <section class="set-page" data-page="look" hidden>
+          <label class="label">Theme</label>
+          <select id="pref-theme" class="field">
+            <option value="system">Follow system</option>
+            <option value="dark">Dark</option>
+            <option value="amoled">AMOLED black</option>
+            <option value="light">Light</option>
+          </select>
+          <label class="label">Icons</label>
+          <select id="pref-icons" class="field">
+            <option value="line">Line – simple, in the text colour</option>
+            <option value="color">Colourful – flat colour icons</option>
+            <option value="material">Material – Android's own icons</option>
+            <option value="duotone">Duotone – two tones, with your accent colour</option>
+            <option value="emoji">Emoji – your phone's own</option>
+          </select>
+          <label class="label">Accent colour</label>
+          <div id="accent-row" class="accent-row"></div>
+          <label class="toggle"><input id="pref-tint" type="checkbox" /> <span>Tint my message bubbles with the accent</span></label>
+          <label class="label">Background in chats with assistants</label>
+          <select id="pref-bg" class="field">
+            <option value="none">None</option>
+            <option value="dots">Dots</option>
+            <option value="grid">Grid</option>
+            <option value="gradient">Soft gradient</option>
+            <option value="card">The persona's picture</option>
+            <option value="image">My photo…</option>
+          </select>
+          <label class="label">Background in roleplay</label>
+          <select id="pref-bg-rp" class="field">
+            <option value="none">None</option>
+            <option value="dots">Dots</option>
+            <option value="grid">Grid</option>
+            <option value="gradient">Soft gradient</option>
+            <option value="card">Character art (full card picture)</option>
+            <option value="avatar">Character avatar</option>
+            <option value="image">My photo…</option>
+          </select>
+          <div id="bg-photo-row" class="row gap" hidden>
+            <button id="bg-photo" class="ghost-btn">📷 Change photo</button>
+            <label class="hint inline">Dim <input id="pref-bg-dim" type="range" min="30" max="92" step="2" /></label>
+          </div>
+          <input id="bg-photo-input" type="file" accept="image/*" hidden />
+          <label class="label">Text size</label>
+          <select id="pref-textsize" class="field">
+            <option value="s">Small</option>
+            <option value="m">Medium</option>
+            <option value="l">Large</option>
+            <option value="xl">Extra large</option>
+          </select>
+          <h3 class="section">Code boxes</h3>
+          <label class="toggle"><input id="pref-highlight" type="checkbox" /> <span>Syntax highlighting</span></label>
+          <label class="label">Long code</label>
+          <select id="pref-code-collapse" class="field">
+            <option value="0">Always show the full code</option>
+            <option value="10">Collapse after 10 lines</option>
+            <option value="20">Collapse after 20 lines</option>
+            <option value="40">Collapse after 40 lines</option>
+          </select>
+          <label class="toggle"><input id="pref-code-wrap" type="checkbox" /> <span>Wrap long lines (like normal text)</span></label>
+          <p class="hint">Each code box also has its own ↩ Wrap button, and collapsed code expands when you tap it. Roleplay text colours are in 🎭 Roleplay.</p>
+        </section>
+
+        <!-- 💾 Data -->
+        <section class="set-page" data-page="prompts" hidden>
+          <p class="hint">These are the instructions the app sends to the model behind the scenes. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Edit any of them – changes apply right away; <b>Reset</b> brings back the original. <code>{placeholders}</code> are filled in by the app; <code>{{char}}</code> / <code>{{user}}</code> work in roleplay prompts.</span></p>
+          <input id="prompts-search" class="field" type="search" placeholder="Search prompts…" autocomplete="off" />
+          <div id="prompts-tabs" class="insp-tabs"></div>
+          <div id="prompts-list"></div>
+        </section>
+        <section class="set-page" data-page="data" hidden>
+          <p class="hint">Everything (chats, files, personas, memories, settings) is stored only on this phone. Uninstalling the app deletes it – export a backup first.</p>
+          <div class="row gap">
+            <button id="backup-export" class="primary-btn">⤴ Export backup</button>
+            <button id="backup-import" class="ghost-btn">⤵ Restore…</button>
+          </div>
+          <input id="backup-file" type="file" accept=".zip,application/zip" hidden />
+          <button id="st-import" class="ghost-btn block">⤵ Import chats (Chronicle .json or SillyTavern .jsonl)</button>
+          <input id="st-file" type="file" accept=".jsonl,.json,.txt,application/jsonl,application/json,text/plain" multiple hidden />
+          <label class="toggle"><input id="backup-keys" type="checkbox" /> <span>Include API keys in the backup</span></label>
+          <div id="move-box" class="autobackup">
+            <h3 class="section">Move to another app or phone</h3>
+            <p class="hint">Everything, to set up again somewhere else: chats, files, personas, memories, settings <b>with your API keys and sign-ins</b>, each chat's git history and search index, and your usage history – plus, if Linux is set up, your Linux home folder (/root: projects, SSH keys, tools' settings) as a second file. Not in it: Claude Code's sign-in (sign in again there) and Linux's installed programs (set up Linux and Claude Code again). On the new app: Restore the zip with <b>Replace</b>, set up Linux, then Import Linux home.</p>
+            <div class="row gap wrap">
+              <button id="move-export" class="primary-btn">📦 Export everything</button>
+              <button id="move-linux-import" class="ghost-btn">🐧 Import Linux home…</button>
+            </div>
+            <p id="move-status" class="hint" aria-live="polite"></p>
+          </div>
+          <div id="autobackup-box" class="autobackup" hidden>
+            <h3 class="section">Automatic backup</h3>
+            <p class="hint">Saves a backup zip (without API keys) into a phone folder you pick, when you open the app and it's due. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Only files named <code>chronicle-backup-…zip</code> are ever removed.</span></p>
+            <div class="row gap-sm wrap">
+              <button id="ab-pick" class="ghost-btn">📱 Choose folder…</button>
+              <span id="ab-folder" class="phone-name"></span>
+            </div>
+            <div class="row gap-sm">
+              <select id="ab-every" class="field" aria-label="How often">
+                <option value="off">Off</option>
+                <option value="daily">Every day</option>
+                <option value="weekly">Every week</option>
+              </select>
+              <select id="ab-keep" class="field" aria-label="Keep the newest">
+                <option value="3">Keep 3</option>
+                <option value="5">Keep 5</option>
+                <option value="10">Keep 10</option>
+              </select>
+            </div>
+            <button id="ab-now" class="ghost-btn small" hidden>Back up now</button>
+            <button id="ab-sync" class="ghost-btn small" hidden>🔄 Merge newest backup from folder</button>
+            <p id="ab-status" class="hint"></p>
+          </div>
+          <p id="backup-status" class="hint"></p>
+          <h3 class="section">Storage</h3>
+          <button id="storage-show" class="ghost-btn block">📦 What's using space?</button>
+          <button id="errlog-open" class="ghost-btn block">🧾 Error log <span id="errlog-count" class="dim"></span></button>
+          <label class="toggle"><input id="pref-perf" type="checkbox" /> <span>🩺 Show timings after each send <span class="dim">(to find what makes the app slow)</span></span></label>
+          <div id="storage-view" class="storage-view" hidden></div>
+          <h3 class="section">Usage</h3>
+          <label class="toggle"><input id="pref-go-usage" type="checkbox" /> <span>Show Go usage meter in the side menu</span></label>
+          <label class="toggle"><input id="pref-claude-usage" type="checkbox" /> <span>Show Claude subscription usage <span class="dim">(side menu and Settings › Account &amp; models – as your Claude Code reports it)</span></span></label>
+          <button id="open-usage" class="ghost-btn block">📊 Usage history</button>
+          <h3 class="section">App updates</h3>
+          <label class="toggle"><input id="pref-update-check" type="checkbox" /> <span>Check for new versions <span class="dim">(GitHub releases, at most every few hours)</span></span></label>
+          <label class="label">GitHub token <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Only needed while the repo is private – fine-grained, read-only “Contents” on the app's repo.</span></label>
+          <input id="gh-token" class="field mono" type="password" placeholder="github_pat_…" autocomplete="off" />
+          <div class="row gap">
+            <button id="update-check" class="ghost-btn">↻ Check now</button>
+            <span id="app-version" class="hint inline"></span>
+          </div>
+          <p id="update-status" class="hint"></p>
+          <h3 class="section">Danger zone</h3>
+          <button id="clear-all" class="danger-btn">Delete all chats</button>
+        </section>
+
+        <button id="save-settings" class="primary-btn set-done">Done</button>
+      </div>
+    </div>
+
+    <!-- Context window -->
+    <div id="ctx-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>Context</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="ctx-model" class="hint"></p>
+        <div id="ctx-total" class="ctx-total"></div>
+        <div id="ctx-bar" class="ctx-bar"></div>
+        <p id="ctx-source" class="hint"></p>
+        <div id="ctx-rows" class="ctx-rows"></div>
+        <p id="ctx-tips" class="hint warn-text"></p>
+        <button id="ctx-compact" class="ghost-btn">📝 Compact now – summarize older messages</button>
+        <button id="ctx-inspect" class="ghost-btn">🔍 Inspect the prompt</button>
+      </div>
+    </div>
+
+    <!-- Prompt inspector -->
+    <div id="inspect-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🔍 Prompt inspector</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div class="insp-tabs" id="insp-tabs">
+          <button data-insp="last" class="insp-tab">Last sent</button>
+          <button data-insp="next" class="insp-tab">Next reply (preview)</button>
+        </div>
+        <p id="insp-meta" class="hint"></p>
+        <div id="insp-list" class="insp-list"></div>
+        <div class="row gap">
+          <button id="insp-copy" class="ghost-btn">📋 Copy as JSON</button>
+          <button id="insp-expand" class="ghost-btn">Expand all</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Custom endpoints -->
+    <div id="prov-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🌐 Custom endpoints</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="prov-main">
+          <p class="hint">Use other OpenAI-compatible APIs, or Claude with your own Anthropic API key, next to OpenCode Go. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Their models appear in the model picker with the provider's name. Your key stays on this phone.</span></p>
+          <div id="prov-list" class="persona-list"></div>
+          <div class="row gap">
+            <button id="prov-add-chub" class="primary-btn">+ Chub (Soji)</button>
+            <button id="prov-add-anthropic" class="ghost-btn">+ Anthropic (Claude)</button>
+            <button id="prov-add-custom" class="ghost-btn">+ Other endpoint</button>
+          </div>
+        </div>
+        <div id="prov-edit" hidden>
+          <label class="label">Name</label>
+          <input id="pv-name" class="field" maxlength="40" />
+          <label class="label">Base URL <span id="pv-url-hint" class="dim">(ends in /v1)</span></label>
+          <input id="pv-url" class="field mono" autocomplete="off" spellcheck="false" placeholder="https://inference.chub.ai/soji/v1" />
+          <label class="label">API key</label>
+          <input id="pv-key" class="field" type="password" autocomplete="off" spellcheck="false" />
+          <p id="pv-anthropic-note" class="hint" hidden>Your own key from <b>platform.claude.com</b> › API keys (pay-as-you-go API billing). A claude.ai Pro/Max sign-in cannot be used by other apps. Claude models ignore temperature, top P/K and penalties; max reply length and stop strings still apply, and roleplay prefill is not sent.</p>
+          <div id="pv-admin-row" hidden>
+            <label class="label">Admin API key <span class="dim">(optional – only to show what this account has spent)</span></label>
+            <input id="pv-admin" class="field" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-admin…" />
+            <p class="hint">An ordinary API key cannot read spending, and no key can read the credit balance (that is on platform.claude.com › Billing). An Admin key (Console › Settings › Admin keys) can – it shows spend for today, 7 days and this month, by model, 4–24 h behind and before credits. <b>It is a powerful key</b> (it can also manage your organization): add it only if you are fine keeping it on this phone. Stored like your other keys, left out of backups, sent only to Anthropic.</p>
+          </div>
+          <div id="pv-oai">
+          <label class="label">Send the key as</label>
+          <select id="pv-auth" class="field">
+            <option value="both-chub">Authorization: Bearer + CH-API-KEY (Chub)</option>
+            <option value="bearer">Authorization: Bearer (most APIs)</option>
+            <option value="ch-api-key">CH-API-KEY only</option>
+            <option value="x-api-key">x-api-key</option>
+          </select>
+          <label class="label">Connect via</label>
+          <select id="pv-via" class="field">
+            <option value="browser">Browser (WebView) – passes Cloudflare; needs CORS (Chub)</option>
+            <option value="native">App network – no CORS needed (most APIs)</option>
+          </select>
+          </div>
+          <label class="label">Model name(s) <span class="dim">(comma separated; used if the endpoint has no model list)</span></label>
+          <input id="pv-models" class="field mono" placeholder="soji" autocomplete="off" spellcheck="false" />
+          <div class="row gap-sm lb-settings">
+            <label id="pv-context-row" class="hint inline">Context <input id="pv-context" class="field num wide" type="number" min="1024" step="1024" /> tokens</label>
+            <label class="hint inline">Max reply <input id="pv-maxtok" class="field num wide" type="number" min="16" placeholder="auto" /></label>
+          </div>
+          <div id="pv-oai-caps">
+          <label class="toggle small"><input id="pv-tools" type="checkbox" /> <span>Supports tool calling (🛠 Tools)</span></label>
+          <label class="toggle small"><input id="pv-vision" type="checkbox" /> <span>Accepts images</span></label>
+          </div>
+          <p id="pv-status" class="hint"></p>
+          <div class="row gap">
+            <button id="pv-save" class="primary-btn">Save</button>
+            <button id="pv-test" class="ghost-btn">Test</button>
+            <button id="pv-back" class="ghost-btn">Back</button>
+            <button id="pv-delete" class="danger-btn" hidden>Remove</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Claude Code: the subscription usage the user's own Claude Code reports (decision 165) -->
+    <div id="cc-usage-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>Claude subscription usage</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Your Claude plan’s limits, as your own Claude Code in Linux reports them (its <code>/usage</code>). Chronicle does not sign in to Claude and sees no account details.</p>
+        <div id="ccu-list" class="go-usage"></div>
+        <div class="row gap-sm"><span id="ccu-status" class="hint inline"></span><button id="ccu-refresh" class="ghost-btn small" type="button">Refresh</button></div>
+      </div>
+    </div>
+
+    <!-- Usage history -->
+    <div id="errlog-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🧾 Error log</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">What went wrong, newest first – also errors nothing on screen showed. Only on this phone: the error text, never your messages or what a tool was given. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>The newest 500 are kept. Copy or Export it to send it along when something breaks; the assistant's doctor tool shows the latest ones too.</span></p>
+        <div id="errlog-filters" class="model-filters"></div>
+        <div id="errlog-list" class="errlog-list"></div>
+        <div class="row gap-sm wrap">
+          <button id="errlog-copy" class="ghost-btn small">Copy</button>
+          <button id="errlog-export" class="ghost-btn small">Export</button>
+          <button id="errlog-clear" class="ghost-btn small danger-text">Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="usage-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📊 Usage</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Tokens used from this phone (chats, tool steps, memory, titles, summaries). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>The $ value is the models' list price – with Go you pay the flat subscription; this shows what it covered.</span></p>
+        <div id="uh-tiles" class="uh-tiles"></div>
+        <div class="uh-legend"><span><i class="in"></i>input</span><span><i class="out"></i>output</span> <span class="dim">last 14 days</span></div>
+        <div id="uh-chart" class="uh-chart"></div>
+        <label class="label">Where it went <span class="dim">(last 30 days: replies, each tool, MCP server and helper job)</span></label>
+        <div id="uh-sources" class="uh-models"></div>
+        <label class="label">Busiest chats</label>
+        <div id="uh-chats" class="uh-models"></div>
+        <label class="label">Daily token budget <span class="dim">(millions of tokens, 0 = no limit)</span></label>
+        <div class="row gap-sm"><input id="uh-budget" class="field num" type="number" min="0" step="0.5" /><span id="uh-budget-note" class="hint inline"></span></div>
+        <label class="label">By model (30 days)</label>
+        <div id="uh-models" class="uh-models"></div>
+        <button id="uh-clear" class="ghost-btn">Clear history</button>
+      </div>
+    </div>
+
+    <!-- Mods -->
+    <div id="mods-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🧩 Mods</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Mods are small add-ons that give the assistant new tools, add slash commands, adjust prompts or react to replies. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Each runs in a sandbox and only gets the permissions you approve – install only mods you trust.</span></p>
+        <div class="row gap-sm wrap">
+          <button id="mod-make" class="primary-btn small">✨ Make one with the Mod Builder</button>
+          <button id="mod-file-btn" class="ghost-btn small">＋ From file</button>
+          <button id="mod-guide-btn" class="ghost-btn small">📖 Guide</button>
+          <input id="mod-file" type="file" accept=".js,.zip,.txt,text/javascript,application/zip" hidden />
+        </div>
+        <div class="row gap-sm">
+          <input id="mod-link" class="field" placeholder="…or paste an https:// link to a .js mod" autocomplete="off" spellcheck="false" />
+          <button id="mod-link-go" class="ghost-btn small">Install</button>
+        </div>
+        <p id="mod-count" class="hint"></p>
+        <div id="mod-list" class="persona-list"></div>
+        <h3 class="section">Examples</h3>
+        <div id="mod-examples" class="menu-list"></div>
+      </div>
+    </div>
+    <div id="mod-install-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="mi-title">Install mod</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="mi-meta" class="hint"></p>
+        <p id="mi-desc"></p>
+        <div class="label">This mod asks to:</div>
+        <ul id="mi-perms" class="mod-permlist"></ul>
+        <p id="mi-warn" class="mod-warn" hidden>It can see your conversations or reach the network. Only install it if you trust where it came from.</p>
+        <details class="pc-adv"><summary>Show the code</summary><pre id="mi-code" class="mod-code"></pre></details>
+        <div class="row gap">
+          <button id="mi-go" class="primary-btn">Install</button>
+          <button id="mi-cancel" class="ghost-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="mod-detail-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="mod-detail-title">Mod</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div class="label">Logs</div>
+        <pre id="mod-detail-logs" class="mod-code"></pre>
+        <div class="label">Source</div>
+        <pre id="mod-detail-code" class="mod-code"></pre>
+      </div>
+    </div>
+    <div id="mod-guide-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📖 Mod guide</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="mod-guide-body" class="md mod-guide"></div>
+      </div>
+    </div>
+
+    <!-- Skills (instruction packages) -->
+    <div id="askills-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📚 Skills</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">A skill is a set of instructions for a kind of task (a name, a description of when to use it, and Markdown steps). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>In chats with 🛠 Tools on, the assistant sees each skill's name and description and loads the full instructions when a task matches.</span></p>
+        <div class="row gap-sm wrap">
+          <button id="askill-make" class="primary-btn small">✨ Make one with the Skill Creator</button>
+          <button id="askill-new" class="ghost-btn small">+ New</button>
+          <button id="askill-import" class="ghost-btn small">⤵ Import</button>
+          <button id="askill-plugin" class="ghost-btn small">🧩 Claude plugin…</button>
+          <input id="askill-file" type="file" accept=".md,.zip,.txt,text/markdown,application/zip" multiple hidden />
+        </div>
+        <div id="askill-form" class="askill-form" hidden>
+          <input id="askill-name" class="field" placeholder="name-with-hyphens, e.g. meeting-notes" autocomplete="off" spellcheck="false" />
+          <input id="askill-desc" class="field" placeholder="What it does, and when to use it" maxlength="600" />
+          <textarea id="askill-ins" class="field" rows="8" placeholder="Instructions in Markdown: steps, rules, the output format…"></textarea>
+          <button id="askill-create" class="primary-btn small">Create skill</button>
+        </div>
+        <p id="askill-count" class="hint"></p>
+        <div id="askill-list" class="persona-list"></div>
+      </div>
+    </div>
+
+    <!-- Saved tools -->
+    <div id="skills-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🧰 Saved tools</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Python tools the assistant saved with <code>save_tool</code>. They run in the sandbox and are offered to the model in every chat with 🛠 Tools on.</p>
+        <p id="skill-count" class="hint"></p>
+        <div id="skill-list" class="persona-list"></div>
+      </div>
+    </div>
+
+    <!-- MCP servers -->
+    <div id="mcp-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🔌 MCP servers</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Connect MCP servers over <b>Streamable HTTP</b> – their tools become available to the assistant when 🛠 Tools is on. Works with:</p>
+        <ul class="hint mcp-help">
+          <li><b>External:</b> <code>https://mcp.deepwiki.com/mcp</code> (no key needed), or any hosted server (add its token/headers).</li>
+          <li><b>On your PC / home network:</b> <code>http://192.168.1.20:8080/mcp</code>. A server that only speaks stdio can be exposed with a bridge such as <code>npx supergateway --stdio "your command" --outputTransport streamableHttp</code>.</li>
+          <li><b>On this phone</b> (e.g. Termux): <code>http://127.0.0.1:PORT/mcp</code>.</li>
+        </ul>
+        <ul class="hint">
+          <li><b>A command</b> (needs the built-in Linux): e.g. <code>npx -y @modelcontextprotocol/server-everything</code> or <code>uvx mcp-server-time</code>. It runs in the app's Linux; Node or uv is installed the first time.</li>
+        </ul>
+        <p class="hint">Servers that need a sign-in show a <b>Sign in</b> button after the first test. Not supported: the old SSE-only transport.</p>
+        <div id="mcp-list" class="persona-list"></div>
+        <details id="mcp-reg" class="mcp-reg">
+          <summary>🔎 Find a server in the MCP registry</summary>
+          <div class="row gap-sm"><input id="mcp-reg-q" class="field" placeholder="github, time, notion…" autocomplete="off" /><button id="mcp-reg-go" class="ghost-btn">Search</button></div>
+          <div id="mcp-reg-list" class="persona-list"></div>
+        </details>
+        <label class="label">Add a server</label>
+        <input id="mcp-url" class="field" placeholder="https://example.com/mcp  or  npx -y @scope/server …" autocomplete="off" spellcheck="false" />
+        <div class="row gap-sm">
+          <input id="mcp-name" class="field" placeholder="Name (optional)" />
+          <input id="mcp-token" class="field" type="password" placeholder="Bearer token (optional)" autocomplete="off" />
+        </div>
+        <textarea id="mcp-headers" class="field mono" rows="2" placeholder="Extra headers (optional), one per line:&#10;X-Api-Key: …" autocomplete="off" spellcheck="false"></textarea>
+        <button id="mcp-add" class="primary-btn">+ Add &amp; test</button>
+      </div>
+    </div>
+
+    <!-- OpenCode on your PC -->
+    <div id="pc-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>💻 OpenCode on my PC</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Use the real OpenCode – with your projects, files and terminal on your computer – from this phone.</p>
+        <ol class="pc-steps">
+          <li>On your PC (OpenCode 2.x): <code>opencode service set hostname 0.0.0.0</code> so the phone can reach it on your Wi‑Fi. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Or skip this and use <code>opencode pair --remote</code> to connect from anywhere – this exposes the server to the internet through OpenTunnel.</span></li>
+          <li>Run <code>opencode pair</code> and copy the link it prints (it works once, for 5 minutes). Replace <code>127.0.0.1</code> with your PC's Wi‑Fi IP if needed.</li>
+          <li>Paste it here and tap Connect. You stay signed in for 30 days.</li>
+        </ol>
+        <input id="pc-link" class="field mono" placeholder="http://192.168.1.20:49374/auth/connect/…" autocomplete="off" spellcheck="false" />
+        <div class="row gap-sm">
+          <input id="pc-name" class="field" placeholder="Name (optional), e.g. Desktop" />
+          <button id="pc-connect" class="primary-btn">Connect</button>
+        </div>
+        <div id="pc-list" class="persona-list pc-list"></div>
+      </div>
+    </div>
+
+    <!-- Your personas -->
+    <div id="me-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>👤 Your personas</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="me-main">
+          <p class="hint">Who <b>you</b> are in roleplay. The name fills <code>{{user}}</code>; the description is sent to roleplay characters as your persona. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Pick one per chat in “This chat”.</span></p>
+          <div id="me-list" class="persona-list"></div>
+          <button id="me-new" class="primary-btn">+ New persona</button>
+        </div>
+        <div id="me-edit" hidden>
+          <label class="label">Name</label>
+          <input id="me-name" class="field" maxlength="40" />
+          <label class="label">Description</label>
+          <textarea id="me-desc" class="field" rows="5" placeholder="Appearance, background, personality of your character…"></textarea>
+          <label class="label">World info <span class="dim">(a lorebook that is always on while you play as this persona)</span></label>
+          <select id="me-lorebook" class="field"></select>
+          <label class="toggle"><input id="me-default" type="checkbox" /> <span>Use by default</span></label>
+          <div class="row gap">
+            <button id="me-save" class="primary-btn">Save</button>
+            <button id="me-back" class="ghost-btn">Back</button>
+            <button id="me-delete" class="danger-btn" hidden>Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lorebooks -->
+    <div id="lore-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📚 Lorebooks</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="lb-main">
+          <p class="hint">World info: an entry is added to the model's prompt only when one of its keywords appears in the last few messages – so big worlds don't fill the context. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Attach a lorebook to a persona (in the persona editor) or to a chat (in “This chat”).</span></p>
+          <div id="lb-list" class="persona-list"></div>
+          <div class="row gap">
+            <button id="lb-new" class="primary-btn">+ New lorebook</button>
+            <button id="lb-import" class="ghost-btn">⤵ Import</button>
+          </div>
+          <input id="lb-file" type="file" accept=".json,.png,.charx,application/json,image/png" multiple hidden />
+          <p class="hint">Import SillyTavern World Info files (.json), chub.ai lorebooks, or the lorebook inside a character card (.png).</p>
+        </div>
+        <div id="lb-edit" hidden>
+          <label class="label">Name</label>
+          <input id="lb-name" class="field" maxlength="60" />
+          <div class="row gap-sm lb-settings">
+            <label class="hint inline">Scan last <input id="lb-scan" class="field num" type="number" min="1" max="50" /> messages</label>
+            <label class="hint inline">Budget <input id="lb-budget" class="field num" type="number" min="100" step="100" /> tokens</label>
+          </div>
+          <label class="toggle small"><input id="lb-recursive" type="checkbox" /> <span>Recursive: activated entries can trigger other entries</span></label>
+          <div id="lb-entries" class="lore-entries"></div>
+          <button id="lb-add-entry" class="ghost-btn block">+ Add entry</button>
+          <div class="row gap">
+            <button id="lb-save" class="primary-btn">Save</button>
+            <button id="lb-back" class="ghost-btn">Back</button>
+            <button id="lb-delete" class="danger-btn">Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Snippets -->
+    <div id="snippets-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>⚡ Snippets</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="snip-main">
+          <p class="hint">Type <b>/</b> at the start of a message to use one. <code>{{text}}</code> is replaced by what you type after the command.</p>
+          <div id="snip-list" class="persona-list"></div>
+          <div class="row gap">
+            <button id="snip-new" class="primary-btn">+ New snippet</button>
+            <button id="snip-restore" class="ghost-btn">Restore defaults</button>
+          </div>
+        </div>
+        <div id="snip-editor" hidden>
+          <label class="label">Command</label>
+          <input id="snip-cmd" class="field mono" placeholder="fix" maxlength="24" />
+          <label class="label">Title</label>
+          <input id="snip-title" class="field" placeholder="Fix code" maxlength="60" />
+          <label class="label">Text</label>
+          <textarea id="snip-text" class="field mono" rows="6"></textarea>
+          <label class="toggle"><input id="snip-send" type="checkbox" /> <span>Send immediately when picked</span></label>
+          <label class="label" for="snip-bar">Quick-reply button</label>
+          <select id="snip-bar" class="field">
+            <option value="">Not on the bar (only as /command)</option>
+            <option value="all">Show above the message box – everywhere</option>
+            <option value="chat">Show above the message box – in chats</option>
+            <option value="rp">Show above the message box – in roleplay</option>
+          </select>
+          <div class="row gap">
+            <button id="snip-save" class="primary-btn">Save</button>
+            <button id="snip-back" class="ghost-btn">Back</button>
+            <button id="snip-delete" class="danger-btn" hidden>Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Packs -->
+    <div id="packs-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📦 Packs</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="pk-main">
+          <p class="hint">A pack is one file with snippets, recipes, skills, MCP servers and chat personas. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>You see everything in it before it is installed, and removing the pack removes all of it.</span></p>
+          <p class="hint">🧩 It can also be a Claude plugin: paste its GitHub link (the repo, its folder, or a marketplace), or pick its .zip. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Its skills, commands (as snippets), agents (as personas) and remote MCP servers are installed as one pack; you see each skill's text first. Hooks and other desktop-only parts are listed but never installed.</span></p>
+          <div id="pk-list" class="persona-list"></div>
+          <div class="row gap-sm wrap">
+            <input id="pk-url" class="field" placeholder="https://…/pack.json or github.com/…" autocomplete="off" spellcheck="false" />
+            <button id="pk-import" class="ghost-btn">Get</button>
+            <button id="pk-file-btn" class="ghost-btn">From a file…</button>
+            <input id="pk-file" type="file" accept=".json,.zip,.plugin,application/json,application/zip" hidden />
+          </div>
+          <button id="pk-make" class="ghost-btn block">📤 Make a pack from my recipes, snippets, skills and MCP servers</button>
+        </div>
+        <div id="pk-review" hidden>
+          <h3 id="pk-title"></h3>
+          <p id="pk-desc" class="hint"></p>
+          <div id="pk-warn" class="warn-box" hidden></div>
+          <ul id="pk-items" class="pk-items"></ul>
+          <ul id="pk-skipped" class="pk-items" hidden></ul>
+          <div id="pk-texts"></div>
+          <div class="row gap">
+            <button id="pk-install" class="primary-btn">Install</button>
+            <button id="pk-cancel" class="ghost-btn">Cancel</button>
+          </div>
+        </div>
+        <div id="pk-market" hidden>
+          <h3 id="pk-mtitle"></h3>
+          <p id="pk-mdesc" class="hint"></p>
+          <div id="pk-mlist" class="persona-list"></div>
+          <button id="pk-mcancel" class="ghost-btn">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recipes -->
+    <div id="recipes-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🧪 Recipes</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="rc-main">
+          <p class="hint">A recipe is a workflow: steps sent one after another, each once the reply before has finished. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Run one with <b>/its-name</b> and its parameters (<code>/weekly-report topic="new phones" days=3</code>). Projects can keep theirs in <code>.chronicle/recipes/</code>.</span></p>
+          <div id="rc-list" class="persona-list"></div>
+          <div class="row gap-sm wrap">
+            <button id="rc-new" class="primary-btn">+ New recipe</button>
+            <input id="rc-url" class="field" placeholder="Import from a link (https://…/recipe.md)" autocomplete="off" spellcheck="false" />
+            <button id="rc-import" class="ghost-btn">Import</button>
+          </div>
+        </div>
+        <div id="rc-editor" hidden>
+          <p class="hint" id="rc-editor-hint"></p>
+          <div id="rc-hidden-warn" class="warn-box" hidden></div>
+          <textarea id="rc-text" class="field mono" rows="16" spellcheck="false"></textarea>
+          <div id="rc-summary" class="hint"></div>
+          <div class="row gap">
+            <button id="rc-save" class="primary-btn">Save</button>
+            <button id="rc-back" class="ghost-btn">Back</button>
+            <button id="rc-delete" class="danger-btn" hidden>Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Restore -->
+    <div id="restore-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>Restore backup</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="restore-info" class="hint"></p>
+        <div class="menu-list">
+          <button id="restore-merge" class="menu-item">➕ Merge <span class="dim">– keep what’s here, add what’s missing</span></button>
+          <button id="restore-replace" class="menu-item danger">♻ Replace everything with the backup</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- A character's page (tap a character on the roleplay start screen) -->
+    <div id="char-sheet" class="sheet sheet-full" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="cv-title">Character</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="cv-body" class="cv-body"></div>
+      </div>
+    </div>
+
+    <!-- Panels added by mods -->
+    <div id="panel-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="panel-title">🧩 Panels</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="panel-list" class="menu-list"></div>
+        <div id="panel-body" class="md panel-body" hidden></div>
+        <div class="row gap-sm"><button id="panel-refresh" class="ghost-btn small" hidden>↻ Refresh</button><button id="panel-back" class="ghost-btn small" hidden>‹ All panels</button></div>
+      </div>
+    </div>
+
+    <!-- Message-box menu: quick actions in a small popover -->
+    <div id="compose-menu" class="sheet popover" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="menu-list">
+          <button id="cmp-attach" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.5l-8.5 8.5a5 5 0 01-7-7L14 5.5a3.3 3.3 0 014.7 4.7L10.2 18.7a1.7 1.7 0 01-2.4-2.4L15.5 8.6"/></svg><span class="cm-label">Attach a file or image</span></button>
+          <button id="cmp-persona" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg><span class="cm-label">Change persona</span></button>
+          <button id="cmp-impersonate" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L17 4l3 3L8 19z"/></svg><span class="cm-label">Write my next message</span></button>
+          <button id="cmp-ptest" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/></svg><span class="cm-label">Prompt test</span></button>
+          <button id="cmp-inspect" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span class="cm-label">Inspect the prompt</span></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tools chip menu: this chat's switch and what is on (the chip never flips tools by itself) -->
+    <div id="tools-menu" class="sheet popover" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="cm-head"><span class="cm-title">🛠 Tools</span><button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        <label class="toggle tools-switch-row"><input id="tools-switch" type="checkbox" /> <span>Tools in this chat</span></label>
+        <div id="tools-on-head" class="tools-on-head"></div>
+        <ul id="tools-on-list" class="tools-on-list"></ul>
+        <div class="menu-list">
+          <button id="tools-settings" class="menu-item cm-item"><span class="cm-label">Tool settings…</span><span class="cm-chev">›</span></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat menu (⋮): a small popover next to the button, short labels; the rest is under "More" -->
+    <div id="chat-menu" class="sheet popover" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="cm-head"><span id="cm-title" class="cm-title">Chat</span><button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        <div id="cm-actions" class="menu-list">
+          <button id="cm-settings" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="cm-label">Chat settings</span></button>
+          <button id="cm-character" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg><span class="cm-label">Character settings</span></button>
+          <button id="cm-memory" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 5 1V5a2 2 0 0 0-2-1z"/><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-5 1V5a2 2 0 0 1 2-1z"/></svg><span class="cm-label">Chat memory</span></button>
+          <button id="cm-find" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></svg><span class="cm-label">Search in this chat</span></button>
+          <button id="cm-fork" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 7v10M18 11c0 4-6 3-12 6"/></svg><span class="cm-label">Fork this chat</span></button>
+          <button id="cm-pin" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 3 3H7l3-3z"/><path d="M12 13v7"/></svg><span class="cm-label">Pin to top</span></button>
+          <button id="cm-rename" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span class="cm-label">Rename</span></button>
+          <button id="cm-more" class="menu-item cm-item" aria-expanded="false"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg><span class="cm-label">More</span><span class="cm-chev">▾</span></button>
+          <div id="cm-more-list" class="cm-more-list" hidden>
+            <button id="cm-autoname" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg><span class="cm-label">Name it with AI</span></button>
+            <button id="cm-folder" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="cm-label">Move to a folder…</span></button>
+            <button id="cm-impersonate" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L17 4l3 3L8 19z"/></svg><span class="cm-label">Write my next message</span></button>
+            <button id="cm-compact" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h14M5 15h14"/><path d="M12 4v3M12 17v3"/></svg><span class="cm-label">Compact older messages</span></button>
+            <button id="cm-to-persona" class="menu-item cm-item" hidden><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg><span class="cm-label">Make a chat persona</span></button>
+            <button id="cm-panels" class="menu-item cm-item" hidden><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 10h16M10 10v10"/></svg><span class="cm-label">Mod panels</span></button>
+          <button id="cm-ptest" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/></svg><span class="cm-label">Prompt test</span></button>
+            <button id="cm-inspect" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span class="cm-label">Inspect the prompt</span></button>
+            <button id="cm-export" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 14v5h14v-5"/></svg><span class="cm-label">Export chat…</span></button>
+            <button id="cm-archive" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8M10 12h4"/></svg><span class="cm-label">Archive</span></button>
+            <button id="cm-delete" class="menu-item cm-item danger"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span class="cm-label">Delete</span></button>
+          </div>
+        </div>
+        <div id="cm-export-box" hidden>
+          <p class="hint">Save or share this chat as a file. To bring one back: ⤵ Import chat on a character's page, or Settings › Data.</p>
+          <div class="menu-list">
+            <button id="cm-export-json" class="menu-item"><span>📦 Chronicle chat (.json)</span><span class="dim choose-sub">Imports back with its character – everything but its files</span></button>
+            <button id="cm-export-st" class="menu-item"><span>🎭 SillyTavern chat (.jsonl)</span><span class="dim choose-sub">For SillyTavern; the character is matched by name</span></button>
+            <button id="cm-export-md" class="menu-item"><span>📝 Markdown (.md)</span><span class="dim choose-sub">To read</span></button>
+            <button id="cm-export-txt" class="menu-item"><span>📄 Plain text (.txt)</span><span class="dim choose-sub">To read</span></button>
+          </div>
+          <p class="hint">The chat's workspace files, API keys and tokens are never in these files. For everything, use Settings › Data › Export backup.</p>
+        </div>
+        <div id="cm-folder-box" hidden>
+          <div id="cm-folder-list" class="menu-list"></div>
+          <input id="cm-folder-new" class="field" maxlength="40" placeholder="New folder name" />
+          <div class="row gap">
+            <button id="cm-folder-add" class="primary-btn">Create &amp; move here</button>
+            <button id="cm-folder-cancel" class="ghost-btn">Back</button>
+          </div>
+        </div>
+        <div id="cm-rename-box" hidden>
+          <input id="cm-rename-input" class="field" maxlength="80" placeholder="Chat name" />
+          <div class="row gap">
+            <button id="cm-rename-save" class="primary-btn">Save</button>
+            <button id="cm-rename-cancel" class="ghost-btn">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Message menu (⋯ on a message) -->
+    <div id="msg-menu" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="mm-title">Message</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="mm-actions" class="menu-list">
+          <button id="mm-speak" class="menu-item">🔊 Read aloud</button>
+          <button id="mm-retry" class="menu-item">🔁 Retry this reply <span class="dim">– the later messages are kept</span></button>
+          <button id="mm-retry-guided" class="menu-item">🎯 Retry with guidance…</button>
+          <button id="mm-retry-model" class="menu-item">🔁 Retry with another model…</button>
+          <button id="mm-correct" class="menu-item">✏️ Correct it with an instruction… <span class="dim">(changes only what you say)</span></button>
+          <div class="menu-sep"></div>
+          <button id="mm-branch" class="menu-item">🌿 Fork from here <span class="dim">– a new chat that starts with the conversation up to this message</span></button>
+          <div class="menu-sep"></div>
+          <button id="mm-delete" class="menu-item danger">🗑 Delete this message</button>
+          <button id="mm-hide" class="menu-item">🙈 Hide from the AI</button>
+          <button id="mm-rewind" class="menu-item">⏪ Rewind to before this message…</button>
+          <button id="mm-delete-after" class="menu-item danger">✂ Delete this and everything after it</button>
+        </div>
+        <div id="mm-rewind-box" class="menu-list" hidden>
+          <p class="hint">Go back to just before this message. Your message comes back into the box so you can change it and send it again.</p>
+          <button id="mm-rewind-both" class="menu-item">⏪ <b>Conversation and files</b> – drop the later messages and undo the file changes they made</button>
+          <button id="mm-rewind-chat" class="menu-item">💬 <b>Conversation only</b> – keep the files as they are now</button>
+          <button id="mm-rewind-files" class="menu-item">📁 <b>Files only</b> – keep the messages, undo the file changes made since</button>
+        </div>
+        <div id="mm-guide-box" hidden>
+          <label class="label">How should the new reply be different?</label>
+          <div class="chips" id="mm-guide-chips"></div>
+          <textarea id="mm-guide" class="field" rows="3" placeholder="e.g. Shorter, and let her hesitate before answering."></textarea>
+          <button id="mm-guide-go" class="primary-btn">🎯 Retry</button>
+        </div>
+        <div id="mm-correct-box" hidden>
+          <label class="label">What should change in this reply?</label>
+          <textarea id="mm-correct-text" class="field" rows="2" placeholder="e.g. She wouldn't know his name yet – fix that."></textarea>
+          <button id="mm-correct-go" class="primary-btn">✏️ Correct</button>
+          <div id="mm-correct-result" hidden>
+            <div id="mm-correct-diff" class="word-diff"></div>
+            <div class="row gap-sm"><button id="mm-correct-keep" class="primary-btn small">Keep the change</button><button id="mm-correct-discard" class="ghost-btn small">Discard</button></div>
+          </div>
+        </div>
+        <div id="mm-model-box" hidden>
+          <label class="label">Retry this reply with</label>
+          <select id="mm-model" class="field"></select>
+          <button id="mm-model-go" class="primary-btn">🔁 Retry</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- This chat: persona + system prompt -->
+    <div id="chat-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>This chat</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="chat-fork-box" class="fork-box" hidden></div>
+        <label class="label">Persona</label>
+        <div id="chat-persona-current" class="persona-current"></div>
+        <div id="chat-persona-picker" class="persona-picker" hidden>
+          <input id="chat-persona-search" class="field" type="search" placeholder="Search characters…" autocomplete="off" />
+          <div id="chat-persona-list" class="persona-list"></div>
+          <label class="toggle small"><input id="chat-persona-all" type="checkbox" /> <span id="chat-persona-all-label">Show assistants too</span></label>
+        </div>
+          <div class="row gap-sm wrap chat-quick">
+        <button id="chat-make-group" class="ghost-btn small">👥 Group chat</button>
+        <button id="chat-manage" class="ghost-btn small">🎭 Personas</button>
+        <button id="chat-map" class="ghost-btn small">🗺 Story map</button>
+        </div>
+        <label class="label">You are <span class="dim">({{user}} in this chat)</span></label>
+        <div class="row">
+          <select id="chat-me" class="field"></select>
+          <button id="chat-me-manage" class="ghost-btn">Manage</button>
+        </div>
+        <label class="label">Context limit <span class="dim">(sliding window – oldest messages stop being sent)</span></label>
+        <select id="chat-ctx" class="field"></select>
+        <label class="label" id="chat-style-row">Reply style <span class="dim">(Explanatory adds why; Learning leaves small parts for you to write)</span></label>
+        <select id="chat-style" class="field"></select>
+        <label class="label" for="chat-proactive">Can write first <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>When you have been quiet – needs Settings › Notifications › Characters can message me first.</span></label>
+        <select id="chat-proactive" class="field">
+          <option value="">No</option>
+          <option value="2">After 2 hours of quiet</option>
+          <option value="6">After 6 hours</option>
+          <option value="12">After 12 hours</option>
+          <option value="24">After a day</option>
+          <option value="72">After 3 days</option>
+        </select>
+        <label class="toggle"><input id="chat-memory" type="checkbox" /> <span>Use &amp; learn memory in this chat <span class="dim">(off = incognito 🕶)</span></span></label>
+        <details id="story-box" class="pc-adv">
+          <summary>📜 Story memory</summary>
+          <p class="hint">Important events of this roleplay, kept up to date in the background and sent with every message – so the story stays consistent even after old messages leave the context window. You can edit it.</p>
+          <label class="toggle small"><input id="story-auto" type="checkbox" /> <span>Keep a story memory for this chat</span></label>
+          <textarea id="story-text" class="field" rows="8" placeholder="Nothing recorded yet."></textarea>
+          <p id="story-info" class="hint"></p>
+          <div class="row gap-sm">
+            <button id="story-update" class="ghost-btn small">↻ Update now</button>
+            <button id="story-rebuild" class="ghost-btn small">Rebuild from whole chat</button>
+          </div>
+        </details>
+        <details id="tracker-box" class="pc-adv">
+          <summary>📊 Scene tracker</summary>
+          <p class="hint">A short sheet of facts – time, place, what everyone wears, mood – updated after each reply and sent with every message, so details stay consistent. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>You can edit it. Fields are set in Settings › Roleplay.</span></p>
+          <label class="toggle small"><input id="tracker-on" type="checkbox" /> <span>Keep a scene sheet for this chat</span></label>
+          <textarea id="tracker-text" class="field mono" rows="7" placeholder="Nothing tracked yet."></textarea>
+          <p id="tracker-info" class="hint"></p>
+          <button id="tracker-update" class="ghost-btn small">↻ Update now</button>
+        </details>
+        <details id="chat-mem-box" class="pc-adv">
+          <summary>🧠 Memories in this chat <span id="chat-mem-count" class="dim"></span></summary>
+          <p id="chat-mem-info" class="hint"></p>
+          <div id="chat-mem-list" class="chat-mem-list"></div>
+          <button id="chat-mem-open" class="ghost-btn small">Open the full memory list</button>
+        </details>
+        <details class="pc-adv">
+          <summary>📝 Author's note</summary>
+          <p class="hint">A steering note for this chat, inserted close to the latest messages (depth 4 = before the last 4 messages). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>E.g. “Keep the tone tense; it's raining.”</span></p>
+          <textarea id="an-text" class="field" rows="3"></textarea>
+          <div class="row gap-sm">
+            <label class="hint inline">Depth <input id="an-depth" class="field num" type="number" min="0" max="50" /></label>
+            <label class="hint inline">As <select id="an-role" class="field"><option value="system">system</option><option value="user">user</option><option value="assistant">character</option></select></label>
+          </div>
+        </details>
+        <div id="chat-preset-row" hidden>
+          <label class="label">🎛 Roleplay preset <span class="dim">(model, prompts and samplers for this chat)</span></label>
+          <select id="chat-preset" class="field"></select>
+        </div>
+        <details class="pc-adv sampler-box" id="chat-samplers"><summary>🎛 Sampler settings <span class="dim">(this chat)</span></summary></details>
+        <div id="chat-lore" class="chat-lore" hidden></div>
+        <button id="lore-suggest" class="ghost-btn block" hidden>✨ Suggest lore entries from this chat</button>
+        <details id="chat-card-box" class="pc-adv card-box" hidden>
+          <summary>🎭 Character definitions <span class="dim">(this chat only)</span></summary>
+          <p class="hint">Change anything about the character for this chat – the character itself stays as it is. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Changes apply from the next message. A cleared field stays empty for this chat.</span></p>
+          <label class="label">Greeting <span class="dim">(replaces the first message while it's still the only one)</span></label>
+          <textarea id="cc-first_mes" class="field" rows="4"></textarea>
+          <label class="label">Description</label>
+          <textarea id="cc-description" class="field" rows="6"></textarea>
+          <label class="label">Personality</label>
+          <textarea id="cc-personality" class="field" rows="3"></textarea>
+          <label class="label">Scenario</label>
+          <textarea id="cc-scenario" class="field" rows="3"></textarea>
+          <label class="label">Example dialogs</label>
+          <textarea id="cc-mes_example" class="field" rows="5"></textarea>
+          <label class="label">Char. system prompt</label>
+          <textarea id="cc-system_prompt" class="field" rows="3"></textarea>
+          <label class="label">Char. post-history instructions</label>
+          <textarea id="cc-post_history_instructions" class="field" rows="3"></textarea>
+          <label class="label">Char. note <span class="dim">(inserted this many messages from the end)</span></label>
+          <div class="row">
+            <textarea id="cc-depth_prompt" class="field" rows="2" placeholder="Character's note"></textarea>
+            <input id="cc-depth" class="field cc-depth" type="number" min="0" max="50" value="4" aria-label="Depth" />
+          </div>
+          <p id="cc-note" class="hint"></p>
+          <div class="row gap">
+            <button id="cc-save" class="primary-btn">Save for this chat</button>
+            <button id="cc-reset" class="ghost-btn">Reset to the character</button>
+          </div>
+        </details>
+        <details id="chat-prompt-box" class="pc-adv">
+          <summary id="chat-prompt-sum">System prompt for this chat</summary>
+          <p class="hint" id="chat-prompt-hint"></p>
+          <textarea id="chat-prompt" class="field mono" rows="8"></textarea>
+          <p id="chat-prompt-note" class="hint"></p>
+          <div class="row gap">
+            <button id="chat-prompt-save" class="primary-btn">Save</button>
+            <button id="chat-prompt-reset" class="ghost-btn">Reset to persona</button>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <!-- Memory -->
+    <div id="memory-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🧠 Memory</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Stored only on this phone. <b>Global</b> memories (added by you) are shared by every persona. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Each persona also <b>learns its own</b> memories from your chats with it. Say “remember that …” or “forget …” in any chat.</span></p>
+        <label class="toggle"><input id="mem-use" type="checkbox" /> <span>Use memories in chats</span></label>
+        <label class="toggle"><input id="mem-learn" type="checkbox" /> <span>Learn automatically from my messages</span></label>
+        <label class="toggle" id="mem-smart-row"><input id="mem-smart" type="checkbox" /> <span>🧠 Smart memory – pick facts by meaning, search chats by meaning, recall in long roleplays <span class="dim">(downloads a ~200 MB model once, runs on the phone)</span></span></label>
+        <p id="mem-smart-status" class="hint" hidden></p>
+        <label class="label">Facts sent per message <span class="dim">(the most relevant ones; 📌 pinned always go)</span></label>
+        <select id="mem-limit" class="field">
+          <option value="0">All of them</option>
+          <option value="8">8</option>
+          <option value="12">12</option>
+          <option value="20">20</option>
+          <option value="40">40</option>
+        </select>
+        <label class="label">Show</label>
+        <select id="mem-filter" class="field"></select>
+        <div class="mem-add-box">
+          <input id="mem-new" class="field" placeholder="Add a memory, e.g. “My name is Sam”" maxlength="300" />
+          <div class="row">
+            <select id="mem-new-scope" class="field" aria-label="Who should know this"></select>
+            <button id="mem-add" class="primary-btn">Add</button>
+          </div>
+        </div>
+        <p id="mem-count" class="hint"></p>
+        <div class="row gap-sm">
+          <button id="mem-shorten" class="ghost-btn small">✂ Shorten long memories</button>
+          <button id="mem-tidy" class="ghost-btn small">🧹 Tidy up</button>
+          <button id="mem-tidy-undo" class="ghost-btn small" hidden>↶ Undo tidy-up</button>
+          <span id="mem-shorten-status" class="hint inline"></span>
+        </div>
+        <div id="mem-list" class="mem-list"></div>
+        <button id="mem-clear" class="danger-btn">🗑 Delete the memories shown</button>
+      </div>
+    </div>
+
+    <!-- Group chat editor -->
+    <div id="group-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>👥 Group chat</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <label class="label">Members</label>
+        <p id="ge-count" class="hint"></p>
+        <input id="ge-search" class="field" type="search" placeholder="Search…" autocomplete="off" />
+        <div id="ge-members" class="persona-list ge-members"></div>
+        <label class="toggle small"><input id="ge-all" type="checkbox" /> <span id="ge-all-label">Show roleplay characters too</span></label>
+        <div id="ge-scene-row" hidden>
+          <label class="label">Scenario card <span class="dim">(roleplay)</span></label>
+          <select id="ge-scene" class="field"></select>
+          <p class="hint">A card that is a <b>world</b> rather than a person: it narrates, plays every character from its lorebook, and its first message opens the chat. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>The others are the player characters.</span></p>
+        </div>
+        <div id="ge-main-row" hidden>
+          <label class="label">Main character <span class="dim">(roleplay)</span></label>
+          <select id="ge-main" class="field"></select>
+          <p class="hint">The main character's card sets the scene – its scenario, world info / lorebook and story prompts. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>The other members just bring their own character.</span></p>
+        </div>
+        <label class="label">Who replies</label>
+        <select id="ge-mode" class="field">
+          <option value="auto">Natural – the conversation decides who replies</option>
+          <option value="all">Everyone, in turn</option>
+        </select>
+        <p class="hint">Natural: a quick check decides who should answer (and who stays quiet) – e.g. whoever was addressed, or who would react in the scene. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>@mentioning members always makes exactly them reply.</span></p>
+        <label class="label">Group name <span class="dim">(optional)</span></label>
+        <input id="ge-name" class="field" maxlength="60" placeholder="e.g. Startup advisors" />
+        <label class="label">Scenario / group instructions <span class="dim">(optional)</span></label>
+        <textarea id="ge-scenario" class="field" rows="3" placeholder="e.g. You are my startup's advisory board. Debate ideas honestly."></textarea>
+        <label class="toggle"><input id="ge-memory" type="checkbox" /> <span>Use &amp; learn memory in this chat</span></label>
+        <div class="row gap">
+          <button id="ge-save" class="primary-btn">Save group</button>
+          <button id="ge-remove" class="ghost-btn" hidden>Back to single persona</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Persona manager -->
+    <div id="personas-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>Personas</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div class="row gap persona-actions">
+          <button id="persona-new" class="primary-btn">+ New</button>
+          <button id="persona-import" class="ghost-btn">⤵ Import card</button>
+          <button id="open-lorebooks" class="ghost-btn">📚 Lorebooks</button>
+        </div>
+        <div class="insp-tabs" id="persona-tabs">
+          <button data-ptab="chat" class="insp-tab">💬 Assistants <span class="mode-count"></span></button>
+          <button data-ptab="rp" class="insp-tab">🎭 Roleplay <span class="mode-count"></span></button>
+        </div>
+        <div id="chub-row" class="row gap-sm chub-row" hidden>
+          <input id="chub-url" class="field" type="url" placeholder="Paste a chub.ai / botbooru.com link" autocomplete="off" />
+          <button id="chub-go" class="ghost-btn">Import</button>
+        </div>
+        <div class="row gap-sm browse-row">
+          <button id="chub-browse" class="ghost-btn" hidden>🌐 Browse Chub</button>
+          <button id="botbooru-browse" class="ghost-btn" hidden>🌐 Browse BotBooru</button>
+          <button id="chararc-browse" class="ghost-btn" hidden>🌐 Character Archive</button>
+        </div>
+        <input id="persona-search" class="field" type="search" placeholder="Search…" autocomplete="off" />
+        <div id="persona-list" class="persona-list"></div>
+        <p class="hint">A persona is a name, a profile picture and a system prompt. Pick one per chat.</p>
+        <button id="persona-restore" class="ghost-btn small">Restore built-in personas</button>
+        <input id="card-file" type="file" accept=".png,.json,.charx,image/png,application/json" multiple hidden />
+        <p class="hint">Character cards: PNG, JSON or .charx (Character Card V1/V2/V3, as used by SillyTavern and similar apps). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden><code>{{char}}</code> and <code>{{user}}</code> are filled in automatically.</span></p>
+      </div>
+    </div>
+
+    <!-- Persona editor / system prompt creator -->
+    <div id="persona-editor" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="pe-title">New persona</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div class="pe-top">
+          <button id="pe-avatar" class="pe-avatar" aria-label="Change picture"></button>
+          <div class="pe-avatar-ctl">
+            <div class="row">
+              <input id="pe-emoji" class="field emoji-field" maxlength="16" placeholder="🙂" aria-label="Emoji" />
+              <button id="pe-photo" class="ghost-btn">📷 Photo</button>
+              <button id="pe-photo-remove" class="ghost-btn" hidden>Remove</button>
+            </div>
+            <div id="pe-colors" class="swatches"></div>
+          </div>
+        </div>
+        <input id="pe-photo-input" type="file" accept="image/*" hidden />
+        <label class="label">Name</label>
+        <input id="pe-name" class="field" placeholder="e.g. Python Mentor" maxlength="40" />
+        <label class="toggle small"><input id="pe-rp" type="checkbox" /> <span>🎭 Roleplay character (shows under Roleplay)</span></label>
+        <label class="label">Short description <span class="dim">(optional)</span></label>
+        <input id="pe-desc" class="field" placeholder="What is this persona for?" maxlength="80" />
+
+        <div id="pe-prompt-block">
+        <div class="gen-box">
+          <label class="label">✨ System prompt creator</label>
+          <textarea id="pe-gen-input" class="field" rows="2" placeholder="Describe it, e.g. “a sarcastic chef who teaches quick healthy recipes”"></textarea>
+          <label class="hint inline">Write with <select id="pe-gen-model" class="field"></select></label>
+          <div class="row gap-sm">
+            <button id="pe-generate" class="primary-btn">✨ Generate</button>
+            <span id="pe-gen-status" class="hint inline"></span>
+          </div>
+        </div>
+
+        <label class="label">System prompt</label>
+        <textarea id="pe-prompt" class="field mono" rows="10" placeholder="You are …"></textarea>
+        <button id="pe-to-card" class="ghost-btn">🎭 Use character-card fields instead (for roleplay)</button>
+        </div>
+        <div id="pe-card" class="pe-card" hidden>
+          <div class="pe-card-title">🎭 Character card</div>
+          <p class="hint">Sent like SillyTavern: main prompt → your persona → description → personality → scenario → example chats → the chat (with the character's note at a depth) → post-history instructions. Macros like <code>{{char}}</code>, <code>{{user}}</code>, <code>{{persona}}</code>, <code>{{time}}</code>, <code>{{random::a::b}}</code>, <code>{{roll::1d20}}</code> and <code>{{if var::mood == angry}}…{{else}}…{{/if}}</code> work everywhere.</p>
+          <label class="toggle small"><input id="pe-scenario-card" type="checkbox" /> <span>🎬 This is a scenario card <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>A world, not a person: it narrates and plays the characters from its lorebook.</span></span></label>
+          <details id="ai-edit" class="pc-adv">
+            <summary>✨ Edit a field with AI</summary>
+            <div class="row gap-sm">
+              <select id="ai-field" class="field">
+                <option value="pc-desc">Description</option>
+                <option value="pc-personality">Personality</option>
+                <option value="pc-scenario">Scenario</option>
+                <option value="pe-greeting">First message</option>
+                <option value="pc-examples">Example dialogue</option>
+              </select>
+            </div>
+            <input id="ai-inst" class="field" placeholder="What should change? e.g. “more concrete detail about her clothes”" />
+            <div id="ai-chips" class="row gap-sm wrap"></div>
+            <div class="row gap-sm">
+              <button id="ai-run" class="primary-btn small">✨ Rewrite</button>
+              <button id="ai-undo" class="ghost-btn small" hidden>↶ Undo</button>
+              <span id="ai-status" class="hint inline"></span>
+            </div>
+          </details>
+          <label class="label">Description</label>
+          <textarea id="pc-desc" class="field" rows="7" placeholder="Who {{char}} is: appearance, background, how they talk…"></textarea>
+          <label class="label">Personality <span class="dim">(short summary)</span></label>
+          <textarea id="pc-personality" class="field" rows="2"></textarea>
+          <label class="label">Scenario</label>
+          <textarea id="pc-scenario" class="field" rows="3" placeholder="Where and how the story starts"></textarea>
+          <label class="label">Example dialogue <span class="dim">(&lt;START&gt; then lines starting with {{user}}: / {{char}}:)</span></label>
+          <textarea id="pc-examples" class="field mono" rows="5" placeholder="<START>&#10;{{user}}: Hi!&#10;{{char}}: *waves* Hello there."></textarea>
+          <details class="pc-adv">
+            <summary>Advanced (character's note, prompt overrides)</summary>
+            <label class="label">Character's note <span class="dim">(inserted into the chat, close to the latest messages)</span></label>
+            <textarea id="pc-note" class="field" rows="3"></textarea>
+            <div class="row gap-sm">
+              <label class="hint inline">Depth <input id="pc-note-depth" class="field num" type="number" min="0" max="50" /></label>
+              <label class="hint inline">As <select id="pc-note-role" class="field"><option value="system">system</option><option value="user">user</option><option value="assistant">character</option></select></label>
+            </div>
+            <label class="label">Main prompt override <span class="dim">(empty = default; {{original}} = the default)</span></label>
+            <textarea id="pc-system" class="field mono" rows="3"></textarea>
+            <label class="label">Post-history instructions <span class="dim">(sent after the chat; {{original}} = your global ones)</span></label>
+            <textarea id="pc-phi" class="field mono" rows="3"></textarea>
+          </details>
+          <pre id="pc-creator" class="tool-out creator-notes" hidden></pre>
+        </div>
+        <div id="pe-greeting-box">
+          <label class="label">Greeting <span class="dim">(the first message that opens a new roleplay)</span></label>
+          <textarea id="pe-greeting" class="field" rows="3" placeholder="*{{char}} looks up from the map.* Oh – you're finally here, {{user}}."></textarea>
+          <p id="pe-alt-count" class="hint"></p>
+        </div>
+        <label class="label">Lorebook <span class="dim">(world info)</span></label>
+        <select id="pe-lorebook" class="field"></select>
+        <label class="label">Context limit <span class="dim">(sliding window for chats with this persona)</span></label>
+        <select id="pe-ctx" class="field"></select>
+        <label class="label">Model <span class="dim">(optional – e.g. different models in a group chat)</span></label>
+        <select id="pe-model" class="field"></select>
+        <label class="label">Creativity (temperature)</label>
+        <select id="pe-temp" class="field">
+          <option value="">Model default</option>
+          <option value="0.2">Precise (0.2)</option>
+          <option value="0.7">Balanced (0.7)</option>
+          <option value="1">Creative (1.0)</option>
+          <option value="1.3">Wild (1.3)</option>
+        </select>
+        <details class="pc-adv" id="pe-tools-box">
+          <summary>🛠 Tools <span id="pe-tools-sum" class="dim"></span></summary>
+          <label class="label">When a chat with this persona starts</label>
+          <select id="pe-tools-on" class="field">
+            <option value="">Tools as the app's default</option>
+            <option value="on">Tools on</option>
+            <option value="off">Tools off</option>
+          </select>
+          <label class="label">Which tools it gets <span class="dim">(only these are sent – fewer tools, smaller prompt)</span></label>
+          <div class="row gap-sm wrap" id="pe-toolset-presets">
+            <button class="ghost-btn small" data-preset="all">All</button>
+            <button class="ghost-btn small" data-preset="coding">Coding</button>
+            <button class="ghost-btn small" data-preset="research">Research</button>
+            <button class="ghost-btn small" data-preset="roleplay">Roleplay</button>
+            <button class="ghost-btn small" data-preset="none">None</button>
+          </div>
+          <div id="pe-toolset" class="toolset-list"></div>
+        </details>
+        <details class="pc-adv sampler-box" id="pe-samplers"><summary>🎛 Sampler settings</summary></details>
+        <details class="pc-adv" id="pe-voice-box">
+          <summary>🔊 Voice <span id="pe-voice-sum" class="dim"></span></summary>
+          <p class="hint">How this persona sounds when replies are read aloud. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Engines are the text-to-speech apps on your phone – install a voice-cloning one (e.g. CloneTTS) to give characters cloned voices.</span></p>
+          <label class="label">Engine</label>
+          <select id="pe-voice-engine" class="field"></select>
+          <label class="label">Voice</label>
+          <select id="pe-voice" class="field"></select>
+          <button id="pe-voice-test" class="ghost-btn small">▶ Test this voice</button>
+          <p id="pe-voice-status" class="hint"></p>
+        </details>
+        <label class="toggle"><input id="pe-default" type="checkbox" /> <span>Use for new chats by default</span></label>
+        <div class="row gap">
+          <button id="pe-save" class="primary-btn">Save</button>
+          <button id="pe-reset" class="ghost-btn" hidden>Restore original</button>
+          <button id="pe-export" class="ghost-btn" hidden>⤴ Export card</button>
+          <button id="pe-to-chat" class="ghost-btn" hidden>💬 Make a chat persona</button>
+          <button id="pe-pin" class="ghost-btn" hidden>📌 Add to home screen</button>
+          <button id="pe-history" class="ghost-btn" hidden>🕘 Version history</button>
+          <button id="pe-delete" class="danger-btn" hidden>Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HTML preview (sandboxed) -->
+    <div id="html-sheet" class="sheet full" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>Preview</h2>
+          <div class="row">
+            <button id="html-reload" class="ghost-btn small">↻ Reload</button>
+            <button id="html-copy" class="ghost-btn small">Copy</button>
+            <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </div>
+        </div>
+        <iframe id="html-frame" class="html-frame" sandbox="allow-scripts allow-forms allow-modals allow-popups" title="HTML preview"></iframe>
+      </div>
+    </div>
+
+    <!-- Workspace files -->
+    <div id="files-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📁 Chat files</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">This chat’s sandbox workspace: files you attached (zips are extracted) and files the assistant created. Tap one to view or share it.</p>
+        <button id="ws-changes" class="ghost-btn small">📝 What this chat changed</button>
+        <div id="ws-changes-box"></div>
+        <details id="git-box" class="git-box">
+          <summary>🌿 Git history <span id="git-sum" class="dim"></span></summary>
+          <p class="hint">A real git repository for this chat's files, on the phone (no Linux needed). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>With history on, every reply that changes files becomes a commit you can go back to. Clone a repo into an empty workspace, or push to GitHub with the token from Settings › Updates.</span></p>
+          <label class="toggle"><input id="git-auto" type="checkbox" /> <span>Commit after every reply that changes files</span></label>
+          <div class="row gap-sm wrap">
+            <input id="git-remote" class="field" placeholder="https://github.com/you/repo.git" autocomplete="off" spellcheck="false" />
+            <button id="git-clone" class="ghost-btn">⬇ Clone</button>
+            <button id="git-pull" class="ghost-btn">⇣ Pull</button>
+            <button id="git-push" class="ghost-btn">⇡ Push</button>
+            <button id="git-commit" class="ghost-btn">✓ Commit now</button>
+          </div>
+          <p id="git-status" class="hint"></p>
+          <div id="git-log" class="git-log"></div>
+        </details>
+        <div id="phone-box" class="phone-box" hidden>
+          <div class="phone-row">
+            <span id="phone-name" class="phone-name"></span>
+            <button id="phone-link" class="ghost-btn small">Link a folder</button>
+            <button id="phone-more" class="icon-btn small" aria-label="Phone folder actions" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></button>
+          </div>
+          <div id="phone-menu" class="phone-menu menu-list" hidden>
+            <button id="phone-in" class="menu-item" hidden>📥 Bring files in</button>
+            <button id="phone-out" class="menu-item" hidden>📤 Save files to it</button>
+            <button id="phone-unlink" class="menu-item danger" hidden>Unlink</button>
+            <p class="hint">The assistant can only see inside the folder you pick. It can also ask you to pick one itself.</p>
+          </div>
+        </div>
+        <button id="ws-all-chats" class="ghost-btn small">📁 Files of all chats…</button>
+        <p id="ws-count" class="hint"></p>
+        <div class="ws-tools">
+          <input id="ws-search" type="search" placeholder="Search files" autocomplete="off" enterkeyhint="search" />
+          <select id="ws-sort" aria-label="Sort files">
+            <option value="name">Name</option>
+            <option value="newest">Newest</option>
+            <option value="size">Size</option>
+            <option value="count">Most files</option>
+          </select>
+        </div>
+        <div id="ws-list" class="ws-list"></div>
+        <div class="row gap">
+          <button id="ws-share-all" class="primary-btn">⤴ Share all as .zip</button>
+          <button id="ws-clear" class="danger-btn">Delete all</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- File preview sheet -->
+    <!-- Tidy up memories: review proposals -->
+    <div id="tidy-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🧹 Tidy up memories</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="tidy-intro" class="hint"></p>
+        <div id="tidy-list" class="tidy-list"></div>
+        <div class="row gap">
+          <button id="tidy-apply" class="primary-btn">Apply selected</button>
+          <button class="ghost-btn" data-close>Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Persona prompt history -->
+    <div id="history-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🕘 Version history</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Earlier versions of this persona's prompt, saved each time you change it (the newest 20). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Compare one with what is in the editor now, or restore it into the editor and save.</span></p>
+        <div id="history-list" class="persona-list"></div>
+      </div>
+    </div>
+
+    <!-- How much freedom the assistant has with a phone folder -->
+    <div id="mode-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🛡 How the agent works</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">For this chat.</p>
+        <p class="hint" id="mode-bypass-note" hidden>⚡ Bypass is on: 🛡 Review acts like ⚡ Auto in this chat; 👁 Read-only stays read-only.</p>
+        <div id="perm-options" class="menu-list">
+          <button class="menu-item" data-perm="auto">⚡ <b>Auto</b> – tools run as your 🔐 Permissions allow (Settings › Tools).</button>
+          <button class="menu-item" data-perm="ask">🛡 <b>Ask first</b> – every change (writing files, shell, Python, browser…) waits for your OK; reading never asks.</button>
+          <button class="menu-item" data-perm="bypass">⚡ <b>Bypass permissions</b> – tools run without asking you first (asks once, with what still asks). Tools set to Never stay off; your personal data still asks.</button>
+          <button class="menu-item" data-perm="plan">📋 <b>Plan</b> – the agent only looks around and proposes a plan; nothing changes until you approve it.</button>
+        </div>
+        <h3 class="section" id="mode-phone-head">📱 Phone folder</h3>
+        <div id="mode-options" class="menu-list">
+          <button class="menu-item" data-mode="ask">🛡 <b>Review</b> – the assistant stages its changes; when it finishes you see each one (with a diff) and accept or reject it.</button>
+          <button class="menu-item" data-mode="auto">⚡ <b>Auto</b> – changes are applied at once, no questions. An "↩ Undo" button under the reply puts everything back.</button>
+          <button class="menu-item" data-mode="readonly">👁 <b>Read-only</b> – the assistant can look at the folder but can never change it.</button>
+        </div>
+        <label class="toggle small"><input id="mode-default" type="checkbox" /> <span>Use this for new chats too</span></label>
+      </div>
+    </div>
+
+    <!-- Review the assistant's changes to the phone folder -->
+    <div id="pt-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🧪 Prompt test</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Send one message to several models and/or system prompts and compare the answers. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Nothing is added to the chat. Uses your tokens, once per variant.</span></p>
+        <textarea id="pt-msg" class="field" rows="3" placeholder="The message to test"></textarea>
+        <label class="toggle small"><input id="pt-ctx" type="checkbox" /> <span>Include the last messages of this chat</span></label>
+        <div id="pt-variants" class="pt-variants"></div>
+        <div class="row gap-sm">
+          <button id="pt-add" class="ghost-btn small">+ Add a variant</button>
+          <button id="pt-run" class="primary-btn">▶ Run all</button>
+        </div>
+      </div>
+    </div>
+    <div id="rules-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="rules-title"></h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="rules-hint" class="hint"></p>
+        <div id="rules-list" class="rules-list"></div>
+        <button id="rules-add" class="ghost-btn block">+ Add</button>
+      </div>
+    </div>
+    <div id="pty-view" class="pty-view" hidden>
+      <div class="pty-head">
+        <span id="pty-title" class="pty-title">Terminal</span>
+        <span class="row gap-sm"><button id="pty-simple" class="ghost-btn small" title="The simple command box, and installing or removing Linux">☰ Command box</button><button id="pty-close" class="ghost-btn small">✕ Close</button></span>
+      </div>
+      <div id="pty-term" class="pty-term"></div>
+      <div id="pty-keys" class="pty-keys">
+        <div class="pty-row"><button data-k="esc">ESC</button><button data-k="/">/</button><button data-k="-">–</button><button data-k="home">HOME</button><button data-k="up">↑</button><button data-k="end">END</button><button data-k="pgup">PGUP</button></div>
+        <div class="pty-row"><button data-k="tab">TAB</button><button data-k="ctrl" class="mod">CTRL</button><button data-k="alt" class="mod">ALT</button><button data-k="left">←</button><button data-k="down">↓</button><button data-k="right">→</button><button data-k="pgdn">PGDN</button></div>
+      </div>
+    </div>
+    <div id="term-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card term-card">
+        <div class="sheet-head">
+          <h2>💻 Linux terminal</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="term-status" class="hint"></p>
+        <div id="term-install" class="row gap-sm" hidden>
+          <button id="term-install-btn" class="primary-btn">Install Linux (Debian, about 30 MB)</button>
+        </div>
+        <pre id="term-out" class="term-out" tabindex="0"></pre>
+        <div id="term-bar" class="row gap-sm term-bar">
+          <input id="term-in" class="field mono" placeholder="Command, e.g. apt-get install -y python3" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" />
+          <button id="term-run" class="primary-btn">Run</button>
+          <button id="term-stop" class="ghost-btn small" title="Stop the running command (restarts the shell)">Stop</button>
+        </div>
+        <div class="row gap-sm wrap">
+          <button id="term-clear" class="ghost-btn small">Clear</button>
+          <button id="term-full" class="ghost-btn small" title="A real terminal: vim, htop, less, nano…">🖥 Full terminal</button>
+          <button id="term-switch" class="ghost-btn small" hidden title="Install Debian in place of Alpine; /root stays">Switch to Debian</button>
+          <button id="term-remove" class="ghost-btn small danger">Remove Linux</button>
+        </div>
+        <p class="hint">A small Debian Linux that runs inside the app (no root). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Files you create stay in it. Use <code>apt-get install -y</code> to install tools. <span id="term-storage-note">It sees only the chat's workspace and a linked phone folder.</span> <button id="term-allfiles" class="link-btn" type="button" hidden>Let it see all phone storage at /sdcard</button></span></p>
+      </div>
+    </div>
+    <div id="smap-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🗺 Story map</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Where this chat came from and where it branched. Tap a chat to open it.</p>
+        <div id="smap-tree" class="smap"></div>
+        <div id="smap-alts-title" class="label" hidden>Forks inside this chat <span class="dim">(retried replies and messages you rewrote – tap a version to go there)</span></div>
+        <div id="smap-alts" class="smap"></div>
+      </div>
+    </div>
+    <div id="loresug-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>✨ Lore suggestions</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="loresug-intro" class="hint"></p>
+        <div id="loresug-list" class="review-list"></div>
+        <div class="row gap">
+          <button id="loresug-add" class="primary-btn">Add selected</button>
+          <button id="loresug-redo" class="ghost-btn">Suggest again</button>
+        </div>
+      </div>
+    </div>
+    <div id="review-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🛡 Review changes</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="review-intro" class="hint"></p>
+        <div id="review-list" class="review-list"></div>
+        <label class="toggle small"><input id="review-auto" type="checkbox" /> <span>⚡ Auto-accept from now on in this chat (you can still undo)</span></label>
+        <div class="row gap">
+          <button id="review-apply" class="primary-btn">Apply selected</button>
+          <button id="review-reject" class="ghost-btn">Reject all</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- The agent asks you something -->
+    <div id="ask-sheet" class="sheet modal" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>❓ <span id="ask-title">Question</span></h2>
+          <button id="ask-hide" class="icon-btn small" aria-label="Hide for now" title="Hide for now (the question stays)"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+        </div>
+        <div id="ask-pager" class="ask-pager" hidden>
+          <button id="ask-prev" class="icon-btn small" aria-label="Previous question"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+          <span id="ask-page" class="ask-page"></span>
+          <button id="ask-next" class="icon-btn small" aria-label="Next question"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+        </div>
+        <p id="ask-question" class="ask-question"></p>
+        <div id="ask-options" class="menu-list"></div>
+        <input id="ask-other" class="field" placeholder="Or type your own answer…" autocomplete="off" />
+        <div class="row gap">
+          <button id="ask-send" class="primary-btn">Answer</button>
+          <button id="ask-skip" class="ghost-btn">Skip – you decide</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- To-do list -->
+    <div id="todo-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📋 To-do list</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <ul id="todo-items" class="todo-list big"></ul>
+        <button id="todo-clear" class="ghost-btn small">Clear the list</button>
+      </div>
+    </div>
+
+    <!-- Share to Chronicle -->
+    <div id="share-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📤 Shared with Chronicle</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="share-preview" class="share-preview"></div>
+        <div id="share-actions" class="menu-list"></div>
+        <label class="toggle small"><input id="share-here" type="checkbox" /> <span>Add it to the chat I have open instead of starting a new one</span></label>
+      </div>
+    </div>
+
+    <!-- Folders -->
+    <div id="new-folder-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>📁 New folder</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <input id="nf-input" class="field" maxlength="40" placeholder="Folder name, e.g. Work or Aquarium project" autocomplete="off" />
+        <button id="nf-create" class="primary-btn">Create folder</button>
+        <p class="hint">Move chats in with a chat's ⋮ menu › Move to a folder. Folders are separate for Chats and Roleplay.</p>
+      </div>
+    </div>
+    <div id="folder-menu" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="fm-title">Folder</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="fm-actions" class="menu-list">
+          <button id="fm-new-chat" class="menu-item">＋ New chat in this folder</button>
+          <button id="fm-rename" class="menu-item">✏️ Rename</button>
+          <div class="menu-sep"></div>
+          <button id="fm-delete" class="menu-item danger">🗑 Delete folder <span class="dim">– the chats stay</span></button>
+        </div>
+        <div id="fm-rename-box" hidden>
+          <input id="fm-rename-input" class="field" maxlength="40" />
+          <div class="row gap">
+            <button id="fm-rename-save" class="primary-btn">Save</button>
+            <button id="fm-rename-cancel" class="ghost-btn">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workspace file manager -->
+    <div id="wsm-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card wsm-card">
+        <div class="sheet-head">
+          <h2>📁 Files</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <!-- where: every chat's workspace, the Linux shell's disk (read-only), the phone folder linked to this chat -->
+        <div id="wsm-locs" class="wsm-locs" role="tablist" aria-label="Places">
+          <button id="wsm-loc-ws" class="wsm-loc on" role="tab" title="Chats' workspaces">💬 Chats</button>
+          <button id="wsm-loc-linux" class="wsm-loc" role="tab" title="Linux files (read-only)" hidden>🐧 Linux</button>
+          <button id="wsm-loc-phone" class="wsm-loc" role="tab" hidden>📱 <span id="wsm-loc-phone-name"></span></button>
+        </div>
+        <div class="wsm-pathbar">
+          <button id="wsm-back" class="icon-btn small" aria-label="Up one level"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+          <div id="wsm-crumbs" class="wsm-crumbs"></div>
+          <button id="wsm-goto" class="icon-btn small" aria-label="Go to a path" hidden><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg></button>
+        </div>
+        <div id="wsm-summary" class="wsm-summary"></div>
+        <p id="wsm-note" class="hint wsm-note" hidden>Read-only: open, save to the phone or copy into this chat. No edit, delete or rename here.</p>
+        <div id="wsm-places" class="wsm-places" hidden></div>
+        <div class="row gap-sm wsm-tools">
+          <input id="wsm-search" class="field search-field" type="search" placeholder="Search" autocomplete="off" />
+          <select id="wsm-sort" class="field" aria-label="Sort">
+            <option value="new">Newest</option>
+            <option value="name">Name</option>
+            <option value="size">Size</option>
+          </select>
+          <button id="wsm-view" class="icon-btn small" aria-label="Show as a list"><svg class="v-grid" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg><svg class="v-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></button>
+          <button id="wsm-select" class="ghost-btn small" hidden>Select</button>
+        </div>
+        <div id="wsm-list" class="wsm-list"></div>
+        <div id="wsm-bar" class="wsm-bar" hidden>
+          <span id="wsm-count" class="hint"></span>
+          <div class="row gap-sm wrap">
+            <button id="wsm-download" class="primary-btn small">⬇ Download</button>
+            <button id="wsm-share" class="ghost-btn small">⤴ Share</button>
+            <button id="wsm-tochat" class="ghost-btn small" hidden>📥 Copy into this chat</button>
+            <button id="wsm-phone" class="ghost-btn small" hidden>📤 To phone folder</button>
+            <button id="wsm-del" class="danger-btn small">Delete</button>
+          </div>
+        </div>
+        <button id="wsm-chat" class="ghost-btn small" hidden>💬 Open this chat</button>
+      </div>
+    </div>
+
+    <!-- Settings › Tools › 🔒 Sensitive phone access (src/app/private-ui.js) -->
+    <div id="private-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🔒 Sensitive phone access</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">Each of these is off until you switch it on. What the assistant reads with them goes to your AI provider as part of the chat, like anything you type. Helper agents never get them, and texts and calls are never read in scheduled checks, triggers or automation runs.</p>
+        <div id="private-body"></div>
+      </div>
+    </div>
+    <div id="sched-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>⏰ Scheduled</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">What the assistant set up to do later, in every chat. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>The app is woken for each one; a quiet check only shows up when it found something new.</span></p>
+        <div id="sched-list"></div>
+      </div>
+    </div>
+    <div id="preview-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="preview-title">File</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="preview-actions" class="row gap" hidden>
+          <button id="preview-html" class="primary-btn" hidden>▶ Preview</button>
+          <button id="preview-copy" class="ghost-btn" hidden>📋 Copy all</button>
+          <button id="preview-download" class="ghost-btn">⬇ Download</button>
+          <button id="preview-saveas" class="ghost-btn">💾 Save as…</button>
+          <button id="preview-share" class="ghost-btn">⤴ Share</button>
+          <button id="preview-tochat" class="ghost-btn" hidden>📥 Copy into this chat</button>
+          <button id="preview-delete" class="danger-btn">Delete</button>
+        </div>
+        <img id="preview-img" class="preview-img" alt="" hidden />
+        <pre id="preview-body" class="preview-body"></pre>
+      </div>
+    </div>
+
+    <div id="voice-mode" class="voice-mode" hidden data-phase="idle">
+      <div class="vm-who" id="vm-who"></div>
+      <button id="vm-orb" class="vm-orb" aria-label="Talk / interrupt"><span></span></button>
+      <div id="vm-status" class="vm-status"></div>
+      <div id="vm-text" class="vm-text"></div>
+      <button id="vm-end" class="ghost-btn">✕ End voice mode</button>
+    </div>
+    <!-- a simple pick-one menu for the app's own questions (export as…, keep the picture?) -->
+    <div id="choose-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="choose-title"></h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="choose-hint" class="hint" hidden></p>
+        <div id="choose-list" class="menu-list"></div>
+      </div>
+    </div>
+    <!-- one line of text: a name, a commit message… (choose.js askText – instead of the system's prompt box) -->
+    <div id="text-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="text-title"></h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p id="text-hint" class="hint text-hint" hidden></p>
+        <input id="text-input" class="field" autocomplete="off" enterkeyhint="done" />
+        <div class="row gap text-actions">
+          <button id="text-ok" class="primary-btn">OK</button>
+          <button class="ghost-btn" data-close>Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="toast" class="toast"></div>
+  </div>
+  <script type="module" src="/src/boot.js"></script>
+    <div id="pick-sheet" class="sheet pick-sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="pick-title">Choose</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <input id="pick-search" class="field" type="search" placeholder="Search…" autocomplete="off" hidden />
+        <div id="pick-list" class="pick-list"></div>
+      </div>
+    </div>
+</body>
+</html>

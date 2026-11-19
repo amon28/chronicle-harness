@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the app may hand to another app: only the two folders it shares from (an APK to install, a file to share). -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="update" path="update/" />
+    <cache-path name="share" path="share/" />
+</paths>

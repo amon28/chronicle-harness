@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="19 19 70 70">
+  <rect width="108" height="108" fill="#1b1238"/><defs>
+    <linearGradient id="cov" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7a2f3d"/><stop offset="1" stop-color="#3f1220"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7dc8a"/><stop offset="1" stop-color="#b8862b"/></linearGradient>
+  </defs>
+  <!-- pages -->
+  <rect x="35" y="30" width="41" height="50" rx="2.5" fill="#efe3c3"/>
+  <path d="M36 78.5h40M36 76.5h40" stroke="#c9b88c" stroke-width=".6"/>
+  <!-- cover -->
+  <rect x="32" y="28" width="42" height="50" rx="3" fill="url(#cov)"/>
+  <rect x="32" y="28" width="7" height="50" rx="3" fill="#2b0c16"/>
+  <path d="M39 28v50" stroke="url(#gold)" stroke-width="1"/>
+  <path d="M32 38h7M32 48h7M32 58h7M32 68h7" stroke="url(#gold)" stroke-width="1.2"/>
+  <!-- frame -->
+  <rect x="42.5" y="32.5" width="28" height="41" rx="1.5" fill="none" stroke="url(#gold)" stroke-width="1"/>
+  <!-- corners -->
+  <g fill="url(#gold)"><path d="M42.5 32.5h5l-5 5z"/><path d="M70.5 32.5h-5l5 5z"/><path d="M42.5 73.5h5l-5-5z"/><path d="M70.5 73.5h-5l5-5z"/></g>
+  <!-- emblem: star burst + gem -->
+  <g transform="translate(56.5 53)">
+    <path d="M0-12L2.6-3.2 11.5 0 2.6 3.2 0 12-2.6 3.2-11.5 0-2.6-3.2z" fill="url(#gold)"/>
+    <circle r="4.2" fill="#2b0c16" stroke="url(#gold)" stroke-width=".8"/>
+    <circle r="2.2" fill="#6ee7d4"/>
+  </g>
+</svg>
