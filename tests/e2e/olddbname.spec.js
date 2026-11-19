@@ -10,6 +10,9 @@ test('data under the old database name is copied over on first start, once, and 
     const del = (n) => new Promise((res) => { const r = indexedDB.deleteDatabase(n); r.onsuccess = r.onerror = r.onblocked = () => res(); });
     await del('chronicle');
     await del('opencode-mobile');
+    // the test's own settings (its key) went with the database: let the fixture seed them again, or the app opens
+    // Settings on start (as it does without a key) and covers the menu
+    localStorage.removeItem('ocm.settingsInIdb');
     const db = await new Promise((res) => {
       const r = indexedDB.open('opencode-mobile', 3);
       r.onupgradeneeded = () => { r.result.createObjectStore('conversations', { keyPath: 'id' }); r.result.createObjectStore('workspaces', { keyPath: 'id' }); r.result.createObjectStore('kv'); };
