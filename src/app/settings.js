@@ -1085,11 +1085,11 @@ $('#move-export').onclick = async () => {
     let linux = '';
     if ((await linuxReady()) && canExportLinux()) {
       const s = await homeTar(packHomeCmd(), 'Packing the Linux home folder');
-      if (!s.ok) throw new Error('packing Linux /root failed' + (s.log ? ': ' + s.log : ''));
+      if (!s.ok) throw new Error('the app data zip was saved, but packing Linux /root failed' + (s.log ? ': ' + s.log : '') + ' – try Export everything again (the zip is made again too)');
       moveSay('⏳ Saving the Linux home folder…');
       const r = await exportLinuxFile(HOME_TAR, { name: `chronicle-linux-home-${day()}.tar.gz` }, (done, total) => moveSay(`⏳ Saving the Linux home folder… ${fmtBytes(done)} of ${fmtBytes(total)}`));
       await runShell(cleanHomeCmd(), { id: 'move', timeoutMs: 30000 }).catch(() => {});
-      linux = ` Linux home folder: ${r.name} (${fmtBytes(r.bytes)}) in ${r.folder}.`;
+      linux = ` Linux home folder: ${r.name} (${fmtBytes(r.bytes)}) in ${r.folder}.${s.skipped ? ` ${s.skipped} file${s.skipped === 1 ? '' : 's'} could not be read and ${s.skipped === 1 ? 'was' : 'were'} left out${s.skippedNames.length ? ` (${s.skippedNames.slice(0, 3).join(', ')}${s.skipped > 3 ? '…' : ''})` : ''}.` : ''}`;
     }
     moveSay(`✓ Everything exported: ${stats.chats} chats, ${stats.files} files, ${stats.extras} git histories and indexes, with keys (${fmtBytes(size)}).${linux || ' (No Linux home: Linux is not set up here.)'} Keep these files private.`);
   } catch (e) {

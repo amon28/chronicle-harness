@@ -55,6 +55,11 @@ describe('the Linux home folder', () => {
     put(join(home, '.config/chronicle/gh-token'), 'TOKEN');
     put(join(home, '.cache/pip/x'), 'C');
     put(join(home, "odd name's.txt"), 'ok');
+    // proot's hard-link emulation leaves git's half-written temporary objects as links to themselves (on the phone they
+    // cannot be opened, and tar gave up on the whole home): they are left out
+    mkdirSync(join(home, 'ocm/.git/objects/4b'), { recursive: true });
+    execFileSync('ln', ['-s', '.l2s.tmp_obj_TyYBj60001', join(home, 'ocm/.git/objects/4b/.l2s.tmp_obj_TyYBj60001')]);
+    put(join(home, 'ocm/.git/objects/4b/realobject'), 'git object');
     expect(sh(packHomeCmd({ home, dir }))).toMatch(/@@STARTED/);
     const s = await wait(dir);
     expect(s.ok).toBe(true);
@@ -65,6 +70,9 @@ describe('the Linux home folder', () => {
     expect(list).toMatch(/\.claude\/settings\.json/);
     expect(list).toMatch(/odd name's\.txt/);
     expect(list).not.toMatch(/credentials|\.claude\.json|backups|gh-token|\.cache\/pip/);
+    expect(list).toMatch(/ocm\/\.git\/objects\/4b\/realobject/);
+    expect(list).not.toMatch(/\.l2s\.tmp_obj_/);
+    expect(s.skipped).toBe(0);
     // somewhere else (the new app's Linux): unpacked into its home, the archive removed afterwards
     const home2 = join(base, 'root2');
     mkdirSync(home2);
@@ -75,4 +83,17 @@ describe('the Linux home folder', () => {
     expect(existsSync(join(home2, '.claude/.credentials.json'))).toBe(false);
     expect(existsSync(join(base, 'in.tar.gz'))).toBe(false);
   }, 30000);
+});
+
+describe('a home folder with files that cannot be read', () => {
+  it('they are skipped and named, and the rest is still packed (exit 0 with --ignore-failed-read)', () => {
+    const out = "@@EXIT 0 52428800\n@@SKIPPED 2\ntar: ./ocm/.git/objects/cf/.l2s.tmp_obj_pLQ7qg0001: Cannot open: Too many levels of symbolic links\ntar: ./work/locked.db: Cannot open: Permission denied\n";
+    const s = parseHomeStatus(out);
+    expect(s).toMatchObject({ done: true, ok: true, bytes: 52428800, skipped: 2 });
+    expect(s.skippedNames).toEqual(['ocm/.git/objects/cf/.l2s.tmp_obj_pLQ7qg0001', 'work/locked.db']);
+    expect(parseHomeStatus('@@EXIT 2 0\n@@SKIPPED 0\ntar: Exiting with failure status').ok).toBe(false);
+  });
+  it('the pack command asks GNU tar to skip unreadable files, and only GNU tar (busybox has no such option)', () => {
+    expect(packHomeCmd()).toMatch(/tar --version 2>\/dev\/null \| grep -q GNU && F="--ignore-failed-read --warning=no-file-changed"/);
+  });
 });
