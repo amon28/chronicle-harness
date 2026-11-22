@@ -48,8 +48,12 @@ const NEVER = new Set([
   'saved_tools',
   'manage_mod',
   'phone_folder',
+  'show_image', // only the main reply is on screen
   'phone_write',
   'phone_delete',
+  'pc_write',
+  'pc_shell',
+  'pc_job',
   'goal',
   'ralph_loop',
   'schedule_task',

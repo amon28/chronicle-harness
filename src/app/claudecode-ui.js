@@ -180,7 +180,16 @@ hooks.ccWarm = (conv) => {
 };
 
 hooks.claudeCodeEnsure = async () => {
-  if (bridgeState().running && (await bridgeHealthy())) return;
+  if (bridgeState().running) {
+    // a phone that just woke up (the app came back from the background) can be slow to answer for a few seconds: asked
+    // again before Claude Code is restarted – a restart ends every open session, and the next message would have to
+    // send the whole chat again (decision 234)
+    for (let i = 0; i < 4; i++) {
+      if (await bridgeHealthy()) return;
+      if (i < 3) await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
+    }
+    logError('claudecode', 'Claude Code did not answer after 4 tries – starting it again (open sessions are reopened from disk when it can)');
+  }
   if (!st?.installed) st = await readStatus().catch(() => st);
   hooks.ccStatusSeen?.(st);
   if (!st?.installed) throw new Error('Claude Code is not installed in Linux yet – Settings › Account & models › Claude Code');

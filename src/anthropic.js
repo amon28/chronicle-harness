@@ -271,11 +271,17 @@ export function refusalText(msg) {
 }
 
 /** A clear message for an SDK error (typed classes, never the message text). A = the SDK's default export. */
+/** The start of the message when the Anthropic account has no credits left (render.js shows its buttons). */
+export const CREDITS_OUT = '💳 Your Anthropic credits ran out.';
+export const isCreditsOut = (text) => /credit balance is too low|Anthropic credits ran out/i.test(String(text || ''));
+
 export function describeAnthropicError(e, A) {
   const detail = () => {
     const b = e?.error?.error || e?.error || {};
     return `${b.type ? `${b.type}: ` : ''}${b.message || e?.message || ''}`.trim();
   };
+  // out of prepaid credits (decision 227): said plainly – the reply shows Open Billing and Another model under it
+  if (/credit balance is too low/i.test(detail())) return `${CREDITS_OUT} Anthropic refused this request until you top up (platform.claude.com › Billing), or send it again with another model. (${detail()})`;
   if (A && e instanceof A.AuthenticationError) return `HTTP 401 – Anthropic did not accept the API key. Check the key in Settings › Custom endpoints › Anthropic (Claude): it comes from platform.claude.com › API keys (a claude.ai subscription sign-in cannot be used here).`;
   if (A && e instanceof A.PermissionDeniedError) return `HTTP 403 – this Anthropic key may not do that: ${detail()}`;
   if (A && e instanceof A.NotFoundError) return `HTTP 404 – ${detail()} (is the model name right? Settings › Custom endpoints › Anthropic › Test lists the models your key has)`;

@@ -8,6 +8,8 @@ import { callTool as mcpCall } from './mcp.js';
 import { sandbox, wsPut, wsList, wsDelete, cleanPath, shotName, conflictText } from './sandbox.js';
 import { P } from './prompts.js';
 import { phoneDefs, phonePrompt, runPhoneTool } from './phonetools.js';
+import { pcDefs, pcPrompt, runPcTool } from './pcfiles.js';
+import { readPhoneFile } from './phonefolder.js';
 import { planDefs, planPrompt, runPlanTool } from './plantools.js';
 import { creatorDefs, creatorPrompt, runCreatorTool } from './creatortools.js';
 import { previewAvailable, renderPreview, renderServed } from './previewpage.js';
@@ -160,6 +162,15 @@ export function toolDefs(enabled, extra = []) {
         ),
       );
   }
+  if (enabled.files)
+    t.push(
+      fn(
+        'show_image',
+        "Show the USER one or more images in the chat, under your reply (they can tap to enlarge and save). Use it whenever the user asks to see, send or show a picture: a file in /workspace (e.g. output/chart.png), in the Linux shell (an absolute path like /root/out/frame.png), or in the linked phone folder (/phone/<path>). view_images is for YOU to look at images; this is for the user. Up to 8 per call.",
+        { paths: { type: 'array', items: { type: 'string' }, description: 'e.g. ["output/chart.png", "/phone/DCIM/a.jpg", "/root/frames/001.png"]' }, caption: { type: 'string', description: 'Optional line shown under the images' } },
+        ['paths'],
+      ),
+    );
   t.push(...planDefs());
   t.push(...doctorDefs());
   t.push(...reloadToolsDef());
@@ -182,6 +193,7 @@ export function toolDefs(enabled, extra = []) {
   t.push(...manageDefs(enabled));
   if (enabled.modAuthor) t.push(...modAuthorDefs());
   if (enabled.phone) t.push(...phoneDefs());
+  if (enabled.pc) t.push(...pcDefs(enabled.pc));
   if (enabled.intents) t.push(...intentDefs());
   if (enabled.device) t.push(...deviceDefs(), ...placesDefs());
   if (enabled.phonectl) t.push(...phoneCtlDefs());
@@ -287,6 +299,8 @@ export function toolsSystemPrompt(enabled, fileCount, phoneFolder, phoneMode, la
   if (enabled.creator && now('creator')) lines.push(creatorPrompt());
   if (enabled.modAuthor) lines.push(modAuthorPrompt());
   if (enabled.phone) lines.push(phonePrompt(phoneFolder, phoneMode, lastReview));
+  if (enabled.files) lines.push('- When the user wants to SEE a picture ("send me / show me the image", a chart you made, a frame you cut), call show_image with its path – /workspace, /phone/<path> or an absolute shell path. It appears under your reply. Never say you cannot send images, and do not paste base64 or a file path instead.');
+  if (enabled.pc && pcPrompt(enabled.pc, phoneMode)) lines.push(pcPrompt(enabled.pc, phoneMode));
   if (enabled.web && enabled.delegate && now('research')) lines.push(deepResearchPrompt());
   if (enabled.intents && now('intents')) lines.push(INTENTS_LINE);
   if (enabled.device && now('device')) lines.push(devicePrompt(), placesPrompt());
@@ -486,6 +500,19 @@ async function shrinkImage(bytes, path, opts = {}) {
   bmp.close?.();
   // enlarged pixel art as PNG (JPEG would smear the edges it is meant to show); photos stay JPEG
   return plan.nearest ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.82);
+}
+
+/** An image for the user to see in the chat: at most 1600 px on the long side, PNG kept (transparency), others JPEG. */
+async function displayImage(bytes, path) {
+  const type = /\.png$/i.test(path) ? 'image/png' : /\.gif$/i.test(path) ? 'image/gif' : /\.webp$/i.test(path) ? 'image/webp' : /\.bmp$/i.test(path) ? 'image/bmp' : 'image/jpeg';
+  const bmp = await createImageBitmap(new Blob([bytes], { type }));
+  const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(bmp.width * k));
+  c.height = Math.max(1, Math.round(bmp.height * k));
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return type === 'image/png' || type === 'image/gif' ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.85);
 }
 
 /** An image the shell has outside /workspace (e.g. /root/repo/icon.png): its bytes, read through the shell. → bytes or a reason */
@@ -843,6 +870,44 @@ async function runToolInner(call, ctx) {
         }
         return { ok: true, result: `${tail} Showing ${images.length} image${images.length === 1 ? '' : 's'} in the next message, in this order: ${images.map((x) => x.path).join('; ')}.`, images, display: { path: host, files: notes.map((n) => n.split('→ ')[1]), urls: [url] } };
       }
+      case 'show_image': {
+        // decision 225: the user asked to see a picture – it goes into the chat, under the reply (not to the model)
+        const raw = (Array.isArray(args.paths) ? args.paths : args.paths ? [args.paths] : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
+        if (!raw.length) throw new Error('Give paths: files in /workspace, /phone/<path> or an absolute path in the shell.');
+        const shown = [];
+        const failed = [];
+        for (const p of raw) {
+          let bytes = null;
+          let why = 'not found';
+          const phone = /^\/phone\/(.+)$/.exec(p);
+          if (phone) {
+            const f = ctx.phone?.folder?.();
+            if (!f) why = 'no phone folder is linked to this chat';
+            else bytes = await readPhoneFile(f, cleanPath(phone[1]), 20 * 1024 * 1024).catch((e) => ((why = e?.message || 'could not be read'), null));
+          } else if (p.startsWith('/') && !/^\/workspace(\/|$)/.test(p)) {
+            ctx.onStatus?.(`reading ${p.split('/').pop()} from the shell…`);
+            const r = await shellImage(p, ctx);
+            bytes = r.bytes || null;
+            if (!bytes) why = r.why;
+          } else bytes = w.files[cleanPath(p)]?.data || null;
+          if (!bytes) {
+            failed.push(`${p} (${why})`);
+            continue;
+          }
+          try {
+            shown.push({ path: p, name: p.split('/').pop(), url: await displayImage(bytes, p) });
+          } catch {
+            failed.push(`${p} (not an image this phone can open)`);
+          }
+        }
+        if (!shown.length) return { ok: false, result: `Nothing was shown: ${failed.join(', ')}.`, display: { error: failed[0]?.slice(0, 80) || 'nothing shown' } };
+        const caption = String(args.caption || '').slice(0, 300);
+        return {
+          ok: true,
+          result: `Shown to the user under your reply: ${shown.map((x) => x.path).join(', ')}. They can see ${shown.length === 1 ? 'it' : 'them'} now – do not paste the file or a link as well.${failed.length ? ` Could not show: ${failed.join(', ')}.` : ''}`,
+          display: { path: shown.map((x) => x.name).join(', '), shown, ...(caption ? { caption } : {}) },
+        };
+      }
       case 'view_images': {
         const raw = Array.isArray(args.paths) ? args.paths : args.paths ? [args.paths] : [];
         // an absolute path outside /workspace is a file in the Linux shell (a clone under /root…): read it from there
@@ -1068,6 +1133,10 @@ async function runToolInner(call, ctx) {
           const r = await runPhoneTool(call.name, args, ctx);
           if (r) return r;
         }
+        if (call.name.startsWith('pc_')) {
+          const r = await runPcTool(call.name, args, ctx);
+          if (r) return r;
+        }
         // saved Python tools
         if (call.name.startsWith('tool_')) {
           const skill = (ctx.settings.skills || []).find((k) => 'tool_' + k.name === call.name && k.enabled !== false);
@@ -1159,11 +1228,19 @@ export const TOOL_LABELS = {
   use_skill: ['📚', 'Used skill'],
   save_skill: ['📚', 'Saved a skill'],
   phone_folder: ['📱', 'Phone folder'],
+  show_image: ['🖼', 'Showed you'],
   phone_list: ['📱', 'Looked in phone folder'],
   phone_read: ['📱', 'Read from phone'],
   phone_import: ['📥', 'Copied from phone'],
   phone_write: ['📤', 'Saved to phone'],
   phone_delete: ['🗑', 'Deleted on phone'],
+  pc_list: ['🖥', 'Looked on the PC'],
+  pc_search: ['🖥', 'Searched the PC'],
+  pc_read: ['🖥', 'Read from the PC'],
+  pc_import: ['📥', 'Copied from the PC'],
+  pc_write: ['📤', 'Saved to the PC'],
+  pc_shell: ['🖥', 'Ran on the PC'],
+  pc_job: ['🖥', 'PC job'],
   shell: ['💻', 'Shell'],
   agent_tool: ['🛠', 'Tool'],
   shell_job: ['💻', 'Shell job'],

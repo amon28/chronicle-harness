@@ -48,7 +48,16 @@ async function onMcp({ chat, method, params }) {
   const set = mcpRuns.get(key) || new Set();
   mcpRuns.set(key, set.add(ac));
   try {
-    return mcpResult(await hooks.ccRunTool(conv, String(params?.name || ''), params?.arguments || {}, { signal: ac.signal, origin }));
+    const r = await hooks.ccRunTool(conv, String(params?.name || ''), params?.arguments || {}, { signal: ac.signal, origin });
+    // a picture Claude Code showed you (show_image, decision 225): under its reply, like in any chat
+    if (!origin && r?.display?.shown?.length) {
+      const m = conv.messages.at(-1);
+      if (m?.role === 'assistant') {
+        (m.shownImages ||= []).push(r.display);
+        if (state.current === conv) rerenderLast();
+      }
+    }
+    return mcpResult(r);
   } finally {
     set.delete(ac);
   }
@@ -286,6 +295,17 @@ hooks.acpRespond = async (conv) => {
   const stopP = stopped.then(() => Promise.reject(STOPPED));
   stopP.catch(() => {}); // only ever awaited through step()
   const step = (p) => Promise.race([p, stopP]);
+  // what it is doing, under the dots – a step that hangs is seen, and ends with its name instead of spinning forever
+  const stage = (s) => {
+    msg.note = s;
+    if (state.current === conv) rerenderLast();
+  };
+  const within = (p, secs, what) => {
+    let t;
+    const late = new Promise((_, rej) => (t = setTimeout(() => rej(new Error(`${what} did not finish in ${secs} s`)), secs * 1000)));
+    return step(Promise.race([p, late]).finally(() => clearTimeout(t)));
+  };
+  let watch = null;
   hooks.beginRun(conv, run);
   let folder = '';
   let sent = false; // the message reached Claude Code's session
@@ -293,23 +313,25 @@ hooks.acpRespond = async (conv) => {
     if (!agent && !picked) throw new Error('This PC agent was removed in Settings');
     // Claude Code in Linux: started (again) when it is not running – after the app restarted the secret is gone
     if (picked || agent.phone) {
-      await step(hooks.claudeCodeEnsure?.());
+      stage('starting Claude Code…');
+      await within(Promise.resolve(hooks.claudeCodeEnsure?.()), 180, 'Starting Claude Code');
       agent = agents().find((a) => a.id === conv.acp.agentId) || agent;
       if (!agent) throw new Error('it did not start');
     }
     const cc = !!(picked || agent.phone);
     // a picker chat works in its own workspace (its files show in 📁); the card's chats in the card's folder
-    folder = cc ? await step(chatFolder(conv)) : '';
+    folder = cc ? await within(chatFolder(conv), 60, "Finding this chat's folder in Linux") : '';
     const cwd = agent.phone ? folder || agent.cwd || '/root' : '.';
     const c = clientFor(agent);
-    await step(c.ready);
+    stage(cc ? 'connecting to Claude Code…' : 'connecting to the agent on your PC…');
+    await within(c.ready, 90, cc ? 'Connecting to Claude Code' : 'Connecting to the PC agent');
     // Claude Code gets Chronicle's skills (~/.claude/skills), its phone tools (the "chronicle" MCP server on the
     // bridge) and the user's own MCP servers (decision 166)
     let mcpServers = [];
     let meta = null;
     let toolNames = [];
     if (cc) {
-      await step(hooks.ccSyncSkills?.().catch(() => {}));
+      await within(Promise.resolve(hooks.ccSyncSkills?.()).catch(() => {}), 60, 'Copying the skills').catch((e) => (e === STOPPED ? Promise.reject(e) : null));
       toolNames = (hooks.ccTools?.(conv) || []).map((t) => t.name);
       const token = bridgeMcpToken();
       const own = userServers(state.settings.mcpServers, { on: toolsOn(conv) && enabledTools(conv).mcp !== false });
@@ -317,24 +339,53 @@ hooks.acpRespond = async (conv) => {
       if (!token) toolNames = [];
       // Chronicle asks for its own tools itself (your permissions, Ask first, Bypass): Claude Code need not ask again
       meta = { claudeCode: { options: { ...(toolNames.length ? { allowedTools: [`mcp__${SERVER}__*`] } : {}), ...(own.deny.length ? { disallowedTools: own.deny } : {}) } } };
-      if (folder) await step(hooks.ccSyncWorkspace?.(conv, 'a').catch(() => {})); // files the user added, into the folder
+      if (folder) {
+        stage("syncing this chat's files with Linux…");
+        await within(Promise.resolve(hooks.ccSyncWorkspace?.(conv, 'a')).catch(() => {}), 180, "Syncing this chat's files"); // files the user added, into the folder
+      }
     }
     let sid = conv.acp.sessionId;
+    // why a new session starts, when one does (decision 234): said in the reply and kept in the error log – it costs the
+    // whole chat as context again, so "the chat changed" must not stand in for every reason
+    let why = '';
     if (sid && !c.client.sessions?.has(sid)) {
-      // the app (or the bridge) restarted: pick the session up again if the agent can, else start a new one
-      const loaded = await step(c.client.loadSession(sid, cwd, { mcpServers, meta }).catch(() => false));
-      if (!loaded) sid = null;
+      // Claude Code was started again (Android stops the app's Linux after a while in the background), or the app was:
+      // the session is still on disk – reopened by session/load, else session/resume
+      stage('picking up the earlier session…');
+      const tryBack = (fn) => within(fn(), 120, 'Picking up the session').then((ok) => ({ ok }), (e) => (e === STOPPED ? Promise.reject(e) : { ok: false, err: String(e?.message || e) }));
+      const a = await tryBack(() => c.client.loadSession(sid, cwd, { mcpServers, meta }));
+      const b = a.ok ? a : await tryBack(() => c.client.resumeSession?.(sid, cwd, { mcpServers, meta }) ?? Promise.resolve(false));
+      if (!b.ok) {
+        const err = a.err || b.err || '';
+        why = `Claude Code had been restarted (Android stops the app's Linux after a while in the background) and could not reopen this chat's session${err ? ` (${err.slice(0, 160)})` : c.client.info?.agentCapabilities?.loadSession || c.client.info?.agentCapabilities?.sessionCapabilities?.resume ? '' : ' – this Claude Code cannot reopen sessions'}`;
+        sid = null;
+      }
     }
     // the chat's persona (Lia, a custom assistant…) goes with the session: Claude Code otherwise only answers as
     // itself. A persona or prompt changed since the session began: a new session, with the chat so far as context
     // (also when the folder, the tools or the MCP servers changed: Claude Code reads those when a session starts)
     const persona = cc ? personaPrompt(conv, { tools: toolNames, cwd: folder }) : '';
-    const shape = cc ? [cwd, toolNames.join(','), mcpServers.map((x) => x.name + '@' + (x.url || x.args?.join(' ') || '')).join(',')].join('|') : '';
+    // what Claude Code reads when a session starts. Chronicle's own MCP server only by its name: its address carries the
+    // bridge's port and this run's handle, which are new after every restart – and a session reopened later is handed
+    // the new address anyway (decision 235). Tools sorted: a different order is no change.
+    const servers = mcpServers.map((x) => (x.name === SERVER ? x.name : x.name + '@' + (x.url || x.args?.join(' ') || ''))).sort().join(',');
+    const shape = cc ? [cwd, [...toolNames].sort().join(','), servers] : [];
     const sigOf = (t) => (t ? String(t.length) + ':' + t.slice(0, 64) + t.slice(-64) : '');
-    const sig = sigOf(persona) + (cc ? '#' + sigOf(shape) : '');
+    // 'v2:' marks this form (folder | tools | servers, each on its own): an earlier one-piece form is told apart by it
+    const sig = sigOf(persona) + (cc ? '#v2:' + shape.map(sigOf).join('|') : '');
+    // a chat saved by an earlier version (its setup in one piece): taken as it is when the persona is the same – updating
+    // the app should not cost a new session
+    const old = String(conv.acp.promptSig || '').split('#');
+    if (sid && cc && old[1] && !old[1].startsWith('v2:') && old[0] === sig.split('#')[0]) conv.acp.promptSig = sig;
     if (sid && (conv.acp.promptSig || '') !== sig) {
       c.client.closeSession?.(sid).catch?.(() => {});
       sid = null;
+      const was = String(conv.acp.promptSig || '').split('#');
+      const now = sig.split('#');
+      const [wf, wt, wm] = String(was[1] || '').replace(/^v2:/, '').split('|');
+      const [nf, nt, nm] = String(now[1] || '').replace(/^v2:/, '').split('|');
+      const parts = [wf !== nf && 'folder', wt !== nt && 'tools', wm !== nm && 'MCP servers'].filter(Boolean);
+      why = was[0] !== now[0] ? "this chat's persona or its prompt changed" : `this chat's ${parts.join(' and ') || 'setup'} changed`;
     }
     // the chat changed since the session last saw it (a message edited and resent, a reply retried or edited, a
     // swipe, messages deleted): Claude Code would answer from a conversation the chat no longer has – a new session,
@@ -343,13 +394,18 @@ hooks.acpRespond = async (conv) => {
     if (sid && cc && conv.acp.seen && conv.acp.seen !== historySig(conv.messages.slice(0, Math.max(0, li)))) {
       c.client.closeSession?.(sid).catch?.(() => {});
       sid = null;
+      why = 'the chat changed since Claude Code last saw it (an edit, a retry, a swipe or a deleted message)';
     }
     let fresh = false;
     if (!sid) {
-      sid = await step(c.client.newSession(cwd, { systemPrompt: persona, mcpServers, meta }));
+      stage(why ? `${why} – starting a new session with the chat so far…` : 'starting a session…');
+      sid = await within(c.client.newSession(cwd, { systemPrompt: persona, mcpServers, meta }), 180, 'Starting a Claude Code session');
       conv.acp.promptSig = sig;
       fresh = true;
-      if (conv.acp.sessionId && !picked && !agent.phone) msg.acpParts.push({ t: 'text', s: `_(A new session ${agent.phone ? 'of Claude Code' : 'on the PC'} – it does not remember the earlier turns.)_\n\n` });
+      if (why && li > 0) {
+        msg.acpParts.push({ t: 'text', s: `_(A new ${cc ? 'Claude Code' : 'agent'} session: ${why}. It was given the chat so far as context.)_\n\n` });
+        logError(cc ? 'claudecode' : 'reply', `New session for "${conv.title || 'a chat'}": ${why}`, { conv: conv.id, title: conv.title });
+      } else if (conv.acp.sessionId && !picked && !agent.phone) msg.acpParts.push({ t: 'text', s: `_(A new session on the PC – it does not remember the earlier turns.)_\n\n` });
       conv.acp.sessionId = sid;
     }
     if (picked) {
@@ -375,6 +431,21 @@ hooks.acpRespond = async (conv) => {
     // pictures attached to this message are in the chat's own folder (synced before the turn): Claude Code opens them
     if (picked && folder && last?.imagePaths?.length) text += `\n\n[Pictures attached to this message, saved in this folder: ${last.imagePaths.join(', ')} – open them with your Read tool to see them]`;
     sent = cc;
+    // sent: the reply is Claude Code's now. Long quiet stretches can be real work, so no time limit – but it is said
+    stage(fresh && li > 1 ? `sent, with the ${li} earlier messages as context – waiting for Claude Code…` : 'waiting for Claude Code…');
+    let seen = -1;
+    let quietSince = Date.now();
+    watch = setInterval(() => {
+      const now = msg.acpParts.length + (msg.content || '').length;
+      if (now !== seen) {
+        if (seen >= 0 && msg.note) stage('');
+        seen = now;
+        quietSince = Date.now();
+        return;
+      }
+      const mins = Math.floor((Date.now() - quietSince) / 60000);
+      if (mins >= 2) stage(`no word from Claude Code for ${mins} min – it may still be working. ⏹ Stop ends this turn; then send again (a new session starts if needed).`);
+    }, 15000);
     // after Stop: the agent's own end of the turn, or this chat moves on after a few seconds without it
     const r = await Promise.race([c.client.prompt(sid, text), stopped.then(() => new Promise((res) => setTimeout(() => res({ stopReason: 'cancelled' }), STOP_WAIT)))]);
     if (r?.stopReason && r.stopReason !== 'end_turn') msg.acpParts.push({ t: 'text', s: `\n\n_(stopped: ${r.stopReason})_` });
@@ -384,6 +455,7 @@ hooks.acpRespond = async (conv) => {
     } else msg.error = picked || agent?.phone ? ccErrorText(e) : `The agent on your PC: ${e.message}`;
     if (msg.error) logError(picked || agent?.phone ? 'claudecode' : 'reply', msg.error, { conv: conv.id, title: conv.title, model: msg.model });
   } finally {
+    clearInterval(watch);
     if (folder) await hooks.ccSyncWorkspace?.(conv, 'b').catch(() => {}); // what Claude Code wrote, into the chat's 📁
     msg.content = compose(msg);
     msg.streaming = false;

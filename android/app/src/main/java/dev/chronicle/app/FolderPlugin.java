@@ -209,10 +209,92 @@ public class FolderPlugin extends Plugin {
             String sub = call.getString("path", "");
             if (path != null && sub != null && !sub.isEmpty()) path = new File(path, sub).getPath();
             File f = path == null ? null : new File(path);
-            if (f != null && f.isDirectory() && f.canRead() && f.list() != null) r.put("path", f.getAbsolutePath());
+            if (f != null && f.isDirectory() && f.canRead() && f.list() != null && reallyReadable(call, f)) r.put("path", f.getAbsolutePath());
         } catch (Exception ignored) {
         }
         call.resolve(r);
+    }
+
+    /**
+     * The folder as a path is only worth binding into Linux when the app can really use it there. With scoped storage
+     * a shared folder can list as empty, or list files the app may not open – then the shell saw an empty /phone and
+     * the assistant went hunting. Every name Android's picker sees must be in the path's listing, and the first file
+     * must open.
+     */
+    private boolean reallyReadable(PluginCall call, File f) {
+        try {
+            DocumentFile dir = find(root(call), call.getString("path", ""));
+            if (dir == null) return false;
+            java.util.HashSet<String> here = new java.util.HashSet<>();
+            String[] names = f.list();
+            if (names == null) return false;
+            java.util.Collections.addAll(here, names);
+            DocumentFile[] kids = dir.listFiles();
+            File sample = null;
+            for (int i = 0; kids != null && i < kids.length && i < 200; i++) {
+                String n = kids[i].getName();
+                if (n == null) continue;
+                if (!here.contains(n)) return false;
+                if (sample == null && kids[i].isFile()) sample = new File(f, n);
+            }
+            if (sample != null) {
+                try (InputStream in = new java.io.FileInputStream(sample)) {
+                    in.read();
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * One file of the linked folder streamed into the shell's copy of it (files/shell/phone/<chat>/…), for a file too big
+     * to go through the app's memory – a video for ffmpeg. Written to a temporary name and then renamed, so the shell
+     * never sees half a file. Progress: "copyProgress" { done, total }. → { bytes }
+     */
+    @PluginMethod
+    public void copyIntoShell(PluginCall call) {
+        new Thread(() -> {
+            File tmp = null;
+            try {
+                DocumentFile root = root(call);
+                if (root == null) throw new Exception("That folder isn't available any more – link it again");
+                DocumentFile src = find(root, call.getString("path", ""));
+                if (src == null || !src.isFile()) throw new Exception("No such file: " + call.getString("path", ""));
+                File base = new File(getContext().getFilesDir(), "shell").getCanonicalFile();
+                File dest = new File(base, call.getString("dest", "").replaceFirst("^/+", "")).getCanonicalFile();
+                if (!dest.getPath().startsWith(base.getPath() + "/phone/")) throw new Exception("not a place for it");
+                File dir = dest.getParentFile();
+                if (dir != null && !dir.isDirectory() && !dir.mkdirs()) throw new Exception("could not make " + dir.getName());
+                tmp = new File(dest.getPath() + ".chronicle-copy");
+                long total = src.length(), done = 0, told = 0;
+                try (InputStream in = getContext().getContentResolver().openInputStream(src.getUri()); OutputStream out = new java.io.FileOutputStream(tmp)) {
+                    if (in == null) throw new Exception("could not open the file");
+                    byte[] buf = new byte[1 << 20];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                        done += n;
+                        if (done - told >= 8L << 20) {
+                            told = done;
+                            JSObject pr = new JSObject();
+                            pr.put("done", done);
+                            pr.put("total", total);
+                            notifyListeners("copyProgress", pr);
+                        }
+                    }
+                }
+                if (total > 0 && done != total) throw new Exception("only " + done + " of " + total + " bytes could be read");
+                if (!tmp.renameTo(dest)) throw new Exception("could not put it in place");
+                JSObject r = new JSObject();
+                r.put("bytes", done);
+                call.resolve(r);
+            } catch (Exception e) {
+                if (tmp != null) tmp.delete();
+                call.reject("Could not copy it into Linux: " + e.getMessage());
+            }
+        }).start();
     }
 
     @PluginMethod

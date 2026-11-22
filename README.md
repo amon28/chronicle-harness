@@ -28,6 +28,7 @@ You don't need Claude at all: any OpenAI-compatible provider works, and the app 
 - a Python sandbox, and a full Linux (Debian, via proot) with a shell and background jobs
 - MCP servers, including sign-in and a registry browser
 - a browser it drives like Playwright, which hands the page to you for sign-ins
+- files on your computer: folders you share with a small script (`scripts/pc-files.py`), read-only unless you allow saving
 - the phone's calendar, contacts, places and notifications, each asking first
 - helper agents on cheaper models
 - plan mode, hooks, `AGENTS.md`/`CLAUDE.md` project instructions, undo and rewind

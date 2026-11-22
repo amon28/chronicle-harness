@@ -997,7 +997,7 @@ async function delegateTo(prompt, signal, conv, opts = {}) {
   // the helper is told only about the tools it was given (a "read" helper has no shell, Python or browser), and never
   // to ask the user to switch something on – it cannot
   const has = (n) => allowed.has(n);
-  const on = { ...on0, claudecode: false, web: on0.web && has('web_search'), python: on0.python && has('run_python'), shell: on0.shell && has('shell'), browser: on0.browser && has('browser'), preview: on0.preview && has('preview_page'), files: has('write_file') || has('read_file'), intents: false, device: false, phonectl: false, private: false, creator: false, modAuthor: false, advisor: false, helper: true };
+  const on = { ...on0, claudecode: false, web: on0.web && has('web_search'), python: on0.python && has('run_python'), shell: on0.shell && has('shell'), browser: on0.browser && has('browser'), preview: on0.preview && has('preview_page'), files: has('write_file') || has('read_file'), intents: false, device: false, phonectl: false, private: false, pc: false, creator: false, modAuthor: false, advisor: false, helper: true };
   const system = (opts.system ? `## Your role (from the project's agent file)\n${opts.system}\n\n` : '') + HELPER_SYSTEM + (allowed.has('run_script') ? '\n\n' + scriptPrompt() : '') + '\n\n' + toolsSystemPrompt({ ...on, delegate: false, autonomy: false, planMode: false, agentsMd: agentsInstructions(opts.toolCtx.workspace?.files), phone: on.phone && allowed.has('phone_read') }, opts.toolCtx.workspace ? Object.keys(opts.toolCtx.workspace.files).length : 0, conv?.phoneFolder, 'readonly');
   const reasoningField = state.models.find((x) => x.id === model)?.api?.['chat-completions']?.compatibility?.reasoning_field;
   // the helper's tools run like the main assistant's, but it cannot ask the user or hand work on
@@ -1337,6 +1337,7 @@ hooks.ccRunTool = async (conv, name, args, { signal, origin = '' } = {}) => {
         return f;
       },
       mode: () => agentModeOf(conv),
+      bypass: () => isBypass(conv),
       stage: phoneStage,
       log: phoneLog,
     },
@@ -2108,6 +2109,7 @@ async function runCompletion(personaArg = null, { first = true, alts = null, gue
               return f;
             },
             mode: () => agentModeOf(conv),
+            bypass: () => isBypass(conv), // pc_shell: Bypass asks nothing, even before a kill or delete (decision 233)
             stage: phoneStage,
             log: phoneLog,
           },

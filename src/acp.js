@@ -167,6 +167,16 @@ export class AcpClient {
     if (Array.isArray(r?.configOptions)) this.configs.set(sessionId, r.configOptions);
     return true;
   }
+  /**
+   * The agent's session from before, without replaying it (ACP session/resume, when the agent offers it): the other way
+   * back into a session after the agent restarted (decision 234).
+   */
+  async resumeSession(sessionId, cwd = '.', { mcpServers = [], meta = null } = {}) {
+    if (!this.info?.agentCapabilities?.sessionCapabilities?.resume) return false;
+    const r = await this.request('session/resume', { sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
+    if (Array.isArray(r?.configOptions)) this.configs.set(sessionId, r.configOptions);
+    return true;
+  }
   /** session/set_config_option (the model, its effort…): the agent answers with all the options as they are now. */
   async setConfigOption(sessionId, configId, value) {
     const r = await this.request('session/set_config_option', { sessionId, configId, value });

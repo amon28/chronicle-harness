@@ -7,7 +7,21 @@
 # to the "chronicle" http server the way Claude Code's MCP client does (initialize, notifications/initialized,
 # tools/list, tools/call), in a thread, and echoes what came back; "mcp-info" lists the servers and _meta it got.
 # session/cancel (decision 167) ends a turn that waits on its permission question with stopReason "cancelled".
-import json, sys, threading, urllib.request, urllib.error
+import json, os, sys, threading, urllib.request, urllib.error
+# FAKE_ACP_STORE (decision 234): like Claude Code, sessions are kept on disk – a restarted agent can session/resume them
+STORE = os.environ.get("FAKE_ACP_STORE", "")
+def stored():
+    try:
+        with open(STORE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+def store(sid, s):
+    if STORE:
+        d = stored()
+        d[sid] = {k: s[k] for k in ("model", "effort", "sp", "spmode", "cwd")}
+        with open(STORE, "w") as f:
+            json.dump(d, f)
 out_lock = threading.Lock()
 def send(o):
     with out_lock:
@@ -77,11 +91,23 @@ def chunk(sid, text): send({"jsonrpc": "2.0", "method": "session/update", "param
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("method") == "initialize":
-        send({"jsonrpc": "2.0", "id": m["id"], "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": False, "sessionCapabilities": {"close": {}, "systemPrompt": {"mode": {"override": {}}}}}, "authMethods": []}})
+        caps = {"close": {}, "systemPrompt": {"mode": {"override": {}}}}
+        if STORE:
+            caps["resume"] = {}
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": False, "sessionCapabilities": caps}, "authMethods": []}})
+    elif m.get("method") == "session/resume":
+        sid = m["params"]["sessionId"]
+        old = stored().get(sid)
+        if not old:
+            send({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32603, "message": "Session not found"}})
+            continue
+        sessions[sid] = {**old, "sets": [], "mcp": m["params"].get("mcpServers") or [], "meta": m["params"].get("_meta") or {}, "resumed": True}
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"configOptions": config(sessions[sid])}})
     elif m.get("method") == "session/new":
-        sid = "s" + str(len(sessions) + 1)
+        sid = "s" + str(len(sessions) + len(stored()) + 1)
         sp = (m["params"].get("systemPrompt") or {})
         sessions[sid] = {"model": "default", "effort": "default", "sets": [], "sp": "".join(b.get("text", "") for b in sp.get("content", [])), "spmode": sp.get("mode", ""), "mcp": m["params"].get("mcpServers") or [], "meta": m["params"].get("_meta") or {}, "cwd": m["params"].get("cwd", "")}
+        store(sid, sessions[sid])
         send({"jsonrpc": "2.0", "id": m["id"], "result": {"sessionId": sid, "configOptions": config(sessions[sid])}})
         # like claude-agent-acp after a session is set up: its slash commands
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "compact", "description": "Clear conversation history but keep a summary in context", "input": {"hint": "<optional custom summarization instructions>"}}, {"name": "review", "description": "Review a pull request"}, {"name": "add-dir", "description": "Add a new working directory", "input": {"hint": "<path>"}}]}}})

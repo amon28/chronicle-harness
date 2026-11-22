@@ -26,6 +26,7 @@ import './app/packs-ui.js';
 import './app/automation.js';
 import './app/pty-ui.js';
 import './app/acp-ui.js';
+import './app/pcfiles-ui.js';
 import './app/claudecode-ui.js';
 import './app/voice-settings.js';
 import './app/jobs-ui.js';

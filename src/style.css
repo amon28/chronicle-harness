@@ -1560,3 +1560,8 @@ body.usage-folded #go-usage .meter, body.usage-folded #go-usage .go-usage-msg, b
 body.usage-folded #go-usage, body.usage-folded #cc-usage-line { padding-top: 8px; padding-bottom: 8px; }
 body.usage-folded #go-usage .go-usage-title, body.usage-folded #cc-usage-line .go-usage-title { margin-bottom: 0; }
 body.usage-folded .go-usage-name > span:not(.usage-chev) { flex: none; }
+/* pictures the assistant showed you (show_image, decision 225): big enough to see, tap for full size */
+.msg-images.shown-images { margin: 8px 0 4px; }
+.msg-images.shown-images img { max-width: 100%; max-height: 420px; width: auto; object-fit: contain; background: var(--bg-2, rgba(127,127,127,.08)); }
+.msg-images.shown-images img:only-child { max-width: min(100%, 520px); }
+.shown-caption { font-size: .85em; margin: -2px 0 6px; }

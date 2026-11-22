@@ -64,6 +64,24 @@ the decisions point there). You do not need to go through it.
    and come back.
 3. Files: open a file from Linux, share it to another app, save one to Download.
 4. Share an image from the gallery to Chronicle: it arrives in a chat.
+5. Files on my PC (decision 223): on a computer on the same Wi-Fi run `python3 pc-files.py ~/Documents` (Windows:
+   `py pc-files.py %USERPROFILE%\Documents`; allow it in the firewall when asked). Settings › Connections › Files on
+   my PC: enter the address and secret it printed, + Connect → "✓ … shares Documents – read-only". In a chat with
+   tools on: "what is in my Documents on the PC?" lists it; "copy report.pdf from my PC" puts it in the workspace.
+   Restart the script with `--write`, Test again, then "save a note to my PC" asks first (Review mode) and the file
+   is there on the computer.
+6. A big video in the phone folder (decision 224): link a folder with a video over 32 MB (e.g. DCIM/Camera), ask
+   "check the video with ffmpeg". It should take a few steps: phone_import says "In the shell now … /phone/<name>",
+   then ffmpeg/ffprobe runs on it. Do it in Auto (or Bypass) and in Review: both work, no searching under /storage.
+
+7. 📎 › Take a photo (decision 229): the camera app opens; the photo appears as an attachment. 📎 › Record a video:
+   record a few seconds; a video-….mp4 chip appears; send "what is in this video?" – the assistant runs ffprobe/ffmpeg
+   on /workspace/videos/…; 📁 shows it under videos/.
+
+8. PC QR, auto start, full control (decision 230): `py pc-files.py %USERPROFILE%\Documents --autostart` prints a QR;
+   Settings › Connections › Files on my PC › 📷 Scan the QR → "✓ … shares Documents". Log out and in on the PC: the
+   phone still connects (Test). `py pc-files.py --full --autostart`, scan again → ⚠ FULL CONTROL; in a Review chat
+   "what is in C:/Users?" works, "run ipconfig on my PC" asks first and shows the output. `--no-autostart` undoes it.
 
 ## F. Voice, sites, updates
 1. Read aloud a reply; voice input types what you say; voice mode answers aloud and listens again.

@@ -19,6 +19,7 @@ export function withoutSecrets(s) {
     });
   // a PC agent's bridge secret; the phone's own Claude Code agent never stores one (claudecode.js)
   if (Array.isArray(s.acpAgents)) s.acpAgents = s.acpAgents.map(({ secret: _s, ...rest }) => rest);
+  if (Array.isArray(s.pcFiles)) s.pcFiles = s.pcFiles.map(({ secret: _s, ...rest }) => rest); // Files on my PC (decision 223)
   return s;
 }
 export const BACKUP_VERSION = 1;
@@ -302,6 +303,8 @@ export async function applyBackup({ data, ws, art: artFiles = {}, extra = null, 
     const mcpOf = new Map((current.mcpServers || []).map((m) => [m.id, m]));
     const acpOf = new Map((current.acpAgents || []).map((a) => [a.id, a.secret]));
     if (Array.isArray(settings.acpAgents)) settings.acpAgents = settings.acpAgents.map((a) => (a.secret || !acpOf.get(a.id) ? a : { ...a, secret: acpOf.get(a.id) }));
+    const pcOf = new Map((current.pcFiles || []).map((a) => [a.id, a.secret]));
+    if (Array.isArray(settings.pcFiles)) settings.pcFiles = settings.pcFiles.map((a) => (a.secret || !pcOf.get(a.id) ? a : { ...a, secret: pcOf.get(a.id) }));
     settings.mcpServers = (settings.mcpServers || []).map((m) => (m.token || m.oauth || !mcpOf.get(m.id) ? m : { ...m, ...(mcpOf.get(m.id).token ? { token: mcpOf.get(m.id).token } : {}), ...(mcpOf.get(m.id).oauth ? { oauth: mcpOf.get(m.id).oauth } : {}) }));
     // every chat goes: its shell copy and its line in the Files page's index too (a restored chat of the same id
     // would otherwise get the old shell files back with its first command)

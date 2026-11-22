@@ -18,6 +18,27 @@ const oauthCodes = new Map();
 const bridges = new Map();
 process.on('exit', () => bridges.forEach((p) => p.kill()));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+/** A bridge started for an earlier test on the same port: stopped, and waited for until it has exited. */
+async function stopBridge(key) {
+  const old = bridges.get(key);
+  bridges.delete(key);
+  if (!old || old.exitCode !== null || old.signalCode !== null) return;
+  const gone = new Promise((r) => old.once('exit', r));
+  old.kill();
+  await Promise.race([gone, wait(3000)]);
+}
+/** Until something accepts connections on the port (the bridge is up), at most 10 s. */
+async function listening(port) {
+  const net = await import('node:net');
+  for (let i = 0; i < 100; i++) {
+    const ok = await new Promise((r) => {
+      const c = net.connect(port, '127.0.0.1', () => (c.end(), r(true)));
+      c.on('error', () => r(false));
+    });
+    if (ok) return;
+    await wait(100);
+  }
+}
 // a tool the request offers: in full, or by name in load_tools' list (held back until loaded – a model may call it
 // directly, which the app allows; decision 175)
 const offered = (jb, name) => (jb.tools || []).some((t) => t.function.name === name || (t.function.name === 'load_tools' && String(t.function.description || '').includes(`- ${name}:`)));
@@ -104,16 +125,18 @@ http
       // a PC agent: the real acp-bridge with a fake ACP agent behind it
       if (req.url.startsWith('/__spawn-acp')) {
         const q = new URL(req.url, 'http://x').searchParams;
-        bridges.get('acp' + q.get('port'))?.kill();
-        const p = spawn('python3', [fileURLToPath(new URL('../../scripts/acp-bridge.py', import.meta.url)), '--host', '127.0.0.1', '--port', q.get('port'), '--secret', q.get('secret'), '--', 'python3', fileURLToPath(new URL('./fixtures/fake_acp_agent.py', import.meta.url))], { stdio: 'ignore' });
+        await stopBridge('acp' + q.get('port')); // the old one must let go of the port first, or the new one cannot listen
+        // store: the fake agent keeps its sessions in this file, as Claude Code keeps them on disk (decision 234)
+        const env = q.get('store') ? { ...process.env, FAKE_ACP_STORE: q.get('store') } : process.env;
+        const p = spawn('python3', [fileURLToPath(new URL('../../scripts/acp-bridge.py', import.meta.url)), '--host', '127.0.0.1', '--port', q.get('port'), '--secret', q.get('secret'), '--', 'python3', fileURLToPath(new URL('./fixtures/fake_acp_agent.py', import.meta.url))], { stdio: 'ignore', env });
         bridges.set('acp' + q.get('port'), p);
-        await wait(900);
+        await listening(Number(q.get('port')));
         return json(200, { ok: true });
       }
       // the fake shell asks for a stdio MCP server: start the real mcp-bridge here, with a tiny echo server behind it
       if (req.url.startsWith('/__spawn-bridge')) {
         const q = new URL(req.url, 'http://x').searchParams;
-        bridges.get(q.get('port'))?.kill();
+        await stopBridge(q.get('port'));
         const p = spawn('python3', [fileURLToPath(new URL('../../src/toolkit/mcp-bridge', import.meta.url)), '--port', q.get('port'), '--secret', q.get('secret'), '--', 'python3', fileURLToPath(new URL('./fixtures/echo_mcp.py', import.meta.url))], { stdio: 'ignore' });
         bridges.set(q.get('port'), p);
         return json(200, { ok: true });

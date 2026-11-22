@@ -16,7 +16,7 @@ import { highlightFile } from '../filehl.js';
 import { closeInfo } from './info.js';
 import { TOOL_GROUPS } from '../toolset.js';
 import { sandbox, getWorkspace, saveWorkspace, wsPut, wsDelete, wsList, deleteWorkspace, looksText, bytesToText, cleanPath } from '../sandbox.js';
-import { anySheetOpen, newChat, openDrawer, openSheet, persist, selectConv } from './chatlist.js';
+import { anchorPopover, anySheetOpen, newChat, openDrawer, openSheet, persist, placeAbove, selectConv } from './chatlist.js';
 import { CC_MODEL, isCcModel } from '../api.js';
 import { $, copyText, hooks, renderMarkdown, currentModel, defaultPersona, el, enabledTools, isGroup, personaById, personas, pref, state, toast, toolsOn } from './core.js';
 import { KeepAlive, stopStream } from './engine.js';
@@ -80,11 +80,7 @@ function renderToolsMenu() {
 $('#tools-btn').onclick = () => {
   renderToolsMenu();
   openSheet('#tools-menu', true);
-  const r = $('#tools-btn').getBoundingClientRect();
-  const card = $('#tools-menu .sheet-card');
-  card.style.width = Math.min(300, window.innerWidth - 16) + 'px';
-  card.style.left = Math.max(8, Math.min(window.innerWidth - Math.min(300, window.innerWidth - 16) - 8, r.left)) + 'px';
-  requestAnimationFrame(() => (card.style.top = Math.max(8, r.top - card.getBoundingClientRect().height - 8) + 'px'));
+  anchorPopover('#tools-menu', () => placeAbove($('#tools-menu .sheet-card'), $('#tools-btn'), 300));
 };
 $('#tools-switch').onchange = () => {
   state.current.tools = $('#tools-switch').checked;
@@ -952,6 +948,7 @@ function handleDeepLink(url) {
   if (u.protocol !== 'chronicle:') return;
   const what = (u.host || u.pathname.replace(/^\/+/, '')).toLowerCase();
   if (what === 'run') return void hooks.automationRun?.(u); // automation (Tasker…), checked against its token
+  if (what === 'pc') return void hooks.pcPair?.(url); // a pc-files.py QR code opened by the camera app (decision 230)
   if (what === 'open') {
     const id = u.searchParams.get('conv');
     const c = id && state.convs?.find?.((x) => x.id === id);
@@ -1110,4 +1107,5 @@ setTimeout(() => checkForUpdate(), 4000);
 document.addEventListener('visibilitychange', () => !document.hidden && checkForUpdate()); // a build finished while the app was in the background
 setTimeout(() => pref('smartMemory') && loadEmbedder().catch(() => {}), 6000);
 
+export { openExternal };
 export { setPreviewButton, showPreviewText, appBuild, fillLearnModelSelect, loadWs, openFiles, openImageViewer, openMemory, openWsFile, setPref, setViewing, shareBytes, shareStream, updateFilesChip, updateShortcuts, updateToolsChip, viewing, wsCacheSync, wsMem };

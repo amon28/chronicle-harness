@@ -808,7 +808,7 @@ let pickOn = new Set(); // single tools given although their group is off
 let pickOff = new Set(); // single tools taken away although their group is on
 let toolMap = null; // { groups: [[key, label, names]], groupOf: { name: [keys] } } – read from the tool list once per editor
 const openGroups = new Set();
-const TOOL_BASE = { web: false, python: false, files: false, shell: false, browser: false, preview: false, delegate: false, claudecode: false, creator: false, phone: false, intents: false, device: false, phonectl: false, private: false, skills: false, autonomy: false, advisor: false, modAuthor: false, planMode: false, agents: [], models: [] };
+const TOOL_BASE = { web: false, python: false, files: false, shell: false, browser: false, preview: false, delegate: false, claudecode: false, creator: false, phone: false, pc: false, intents: false, device: false, phonectl: false, private: false, skills: false, autonomy: false, advisor: false, modAuthor: false, planMode: false, agents: [], models: [] };
 /** Which tools each group brings (the ones every chat has are "base"): from the app's own tool list. */
 function readToolMap() {
   const names = (en) => {

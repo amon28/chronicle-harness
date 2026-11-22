@@ -648,6 +648,49 @@ describe('the phone folder when it cannot be bound', () => {
     }
   });
 
+  it('a phone video too big to mirror is named in the notes, and phone_import streams it into /phone for the shell (decision 224)', async () => {
+    const { runPhoneTool } = await import('../../src/phonetools.js');
+    disk = { 'notes.txt': enc('hi'), 'Camera/VID_1.mp4': enc('a long video of many bytes') };
+    phoneStub(null);
+    const copied = [];
+    globalThis.__ocmPhoneFolder.copyIntoShell = async ({ path, dest }) => {
+      copied.push({ path, dest });
+      fs.put('shell/' + dest, dec(disk[path]));
+      return { bytes: disk[path].length };
+    };
+    const keep = LIMITS.phoneFile;
+    LIMITS.phoneFile = 8;
+    try {
+      const w = workspace();
+      const folder = { uri: 'content://p', name: 'Movies' };
+      const exported = [];
+      globalThis.__ocmPhoneFolder.exportLinuxFile = async (o) => (exported.push(o), { bytes: 0 });
+      const ctx = { convId: 'c1', workspace: w, ask: async () => 'Save it', phone: { folder: () => folder, mode: () => 'auto', stage: new Map(), log: [] } };
+      // not copied on every command, but said – so the assistant does not hunt for it under /storage
+      const first = await syncPhoneIn(folder, 'c1', w);
+      expect(fs.get('shell/phone/c1/Camera/VID_1.mp4')).toBeUndefined();
+      expect(first.note).toMatch(/not in \/phone .*Camera\/VID_1\.mp4 .*phone_import one with to_shell:true/);
+      expect((await syncPhoneIn(folder, 'c1', w)).note).toMatch(/Camera\/VID_1\.mp4/);
+
+      const r = await runPhoneTool('phone_import', { path: 'Camera/VID_1.mp4' }, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.result).toMatch(/In the shell now.*\n\/phone\/Camera\/VID_1\.mp4/);
+      expect(copied).toEqual([{ path: 'Camera/VID_1.mp4', dest: 'phone/c1/Camera/VID_1.mp4' }]);
+      expect(fs.get('shell/phone/c1/Camera/VID_1.mp4')).toBe('a long video of many bytes');
+      expect(w.files['Camera/VID_1.mp4']).toBeUndefined(); // not through the workspace (memory)
+      // in sync both ways now: not copied again, not offered back to the phone, no longer listed as missing
+      const again = await syncPhoneIn(folder, 'c1', w);
+      expect(again.note || '').not.toMatch(/VID_1/);
+      await syncPhoneOut(folder, 'c1', w, ctx);
+      expect(exported).toEqual([]);
+      // a folder import: the small file to /workspace, the big one to the shell
+      const both = await runPhoneTool('phone_import', { path: '' }, ctx);
+      expect(both.result).toMatch(/Copied 1 file into \/workspace:\nnotes\.txt\nToo big for \/workspace, so in the shell instead:\n\/phone\/Camera\/VID_1\.mp4/);
+    } finally {
+      LIMITS.phoneFile = keep;
+    }
+  });
+
   it('removes a file from /phone when it was deleted on the phone', async () => {
     disk = { 'a.txt': enc('a'), 'b.txt': enc('b') };
     phoneStub(null);

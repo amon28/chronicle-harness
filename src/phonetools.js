@@ -1,6 +1,7 @@
 // Agent tools for a phone folder the user has linked: look around, bring files into the workspace,
 // save files back. Everything stays inside that one folder.
-import { listFolder, readPhoneFile, writePhoneFile, removePhoneFile, phoneExists, exportLinuxFile, canExportLinux } from './phonefolder.js';
+import { listFolder, readPhoneFile, writePhoneFile, removePhoneFile, phoneExists, exportLinuxFile, canExportLinux, folderLocalPath, canCopyIntoShell } from './phonefolder.js';
+import { bringIntoShell, LIMITS } from './bridge.js';
 import { statPath, errorText } from './linuxfiles.js';
 import { statEntry, workDir, phoneDir } from './shellfs.js';
 import { wsPut, wsList, looksText, bytesToText, cleanPath } from './sandbox.js';
@@ -21,7 +22,7 @@ export function phoneDefs() {
     fn('phone_folder', 'Ask the user to point you at a folder on their phone (opens Android\'s folder picker) or check which one is linked to this chat. Call it with action "link" when the user says to go to / use a folder and none is linked yet, or when they want a different one.', { action: { type: 'string', enum: ['status', 'link'], description: 'status = which folder is linked; link = ask the user to choose one' } }, ['action']),
     fn('phone_list', 'List files and folders inside the linked phone folder. Paths are relative to it.', { path: { type: 'string', description: 'Sub-folder, default the top level' }, recursive: { type: 'boolean', description: 'Include everything below (up to 1000 entries)' } }),
     fn('phone_read', 'Read a text file from the linked phone folder (use phone_import for images and other files).', { path: { type: 'string' }, max_chars: { type: 'integer', description: 'Default 12000' } }, ['path']),
-    fn('phone_import', 'Copy a file or a whole folder from the linked phone folder into /workspace so you can use read_file, view_images and run_python on it. Returns the workspace paths.', { path: { type: 'string', description: 'File or folder in the phone folder; empty = the whole linked folder' }, to: { type: 'string', description: 'Workspace folder to copy into: a file keeps its name (to "imported" → imported/<name>), a folder\'s contents go into it. For a single file, a to ending in the same extension as the file (e.g. "docs/notes.md") is the new file name instead. Default: the same relative path as on the phone' } }),
+    fn('phone_import', 'Copy a file or a whole folder from the linked phone folder into /workspace so you can use read_file, view_images and run_python on it. Returns the workspace paths. A file over 32 MB (a video, an archive) goes into the shell instead, at /phone/<path>, streamed whatever its size – the result says where; use it there with shell (ffmpeg, unzip…). to_shell:true sends any file there.', { path: { type: 'string', description: 'File or folder in the phone folder; empty = the whole linked folder' }, to_shell: { type: 'boolean', description: 'Put the file(s) in the shell at /phone/<path> instead of /workspace (for shell tools; any size)' }, to: { type: 'string', description: 'Workspace folder to copy into: a file keeps its name (to "imported" → imported/<name>), a folder\'s contents go into it. For a single file, a to ending in the same extension as the file (e.g. "docs/notes.md") is the new file name instead. Default: the same relative path as on the phone' } }),
     fn(
       'phone_write',
       'Create or overwrite a file in the linked phone folder. Give either content (text), from_workspace (a file already in /workspace, e.g. a chart you made) or from_shell (a file in the Linux shell, any size – a recording, a build: it is copied straight from the shell\'s disk, never through memory; use this for anything over a few MB). In review mode it is staged for the user to accept (from_shell: the user is asked right away); in auto mode it is saved at once; in read-only mode it is refused.',
@@ -40,7 +41,7 @@ export function phonePrompt(folder, mode = 'ask', lastReview = '') {
       : mode === 'auto'
         ? 'Changes you make with phone_write / phone_delete are applied immediately (the user can undo them afterwards).'
         : 'Changes you make with phone_write / phone_delete are NOT applied yet: they are staged, and the user reviews and accepts or rejects each one when your turn ends. phone_read / phone_list already show your staged changes. Make all your changes in one go, then stop and say what you changed.';
-  return `- A phone folder is linked: "${folder.name}". Use phone_list / phone_read to look at it, phone_import to bring files into /workspace (needed before view_images or run_python), and phone_write to save results back (a file in the Linux shell, any size: phone_write from_shell – never read it into the workspace first). Paths are relative to that folder. ${how}${lastReview ? `\n  Last review by the user: ${lastReview}` : ''}`;
+  return `- A phone folder is linked: "${folder.name}". Use phone_list / phone_read to look at it, phone_import to bring files into /workspace (needed before view_images or run_python; a file over 32 MB – a video for ffmpeg – goes to the shell at /phone/<path> instead, and the result says so), and phone_write to save results back (a file in the Linux shell, any size: phone_write from_shell – never read it into the workspace first). Paths are relative to that folder. ${how}${lastReview ? `\n  Last review by the user: ${lastReview}` : ''}`;
 }
 
 /** A path to change in the linked folder: ".." is refused (cleanPath would quietly drop it and change another file). */
@@ -214,6 +215,22 @@ export async function runPhoneTool(name, args, ctx) {
       let files;
       if (ex.isDir) files = (await listFolder(f, src, true)).filter((e) => !e.isDir);
       else files = [{ path: src, size: ex.size }];
+      // big files (and everything, with to_shell) go into the shell's /phone, streamed by Android (decision 224)
+      const toShell = files.filter((e) => !staged(ctx).has(e.path) && (args.to_shell || (e.size || 0) > LIMITS.phoneFile));
+      const shellNote = [];
+      if (toShell.length) {
+        if (!canCopyIntoShell() && !args.to_shell) throw new Error(`${toShell[0].path} is ${fmtKB(toShell[0].size)} – too big for the workspace, and copying it into the shell needs the Android app.`);
+        const bound = (ctx.phone?.mode?.() || 'ask') === 'auto' && !!(await folderLocalPath(f).catch(() => null));
+        for (const e of toShell) {
+          ctx.onStatus?.(`copying ${e.path.split('/').pop()} (${fmtKB(e.size || 0)}) into the shell…`);
+          const r = await bringIntoShell(f, ctx.convId || 'main', ctx.workspace, e.path, { bound, onProgress: (d, t) => ctx.onStatus?.(`copying ${e.path.split('/').pop()} into the shell – ${Math.round((d / Math.max(1, t)) * 100)}%`) });
+          if (!r.ok) throw new Error(`Could not put ${e.path} in the shell: ${r.why}`);
+          shellNote.push(r.where + (r.already ? ' (already there: /phone is the folder itself)' : ` (${fmtKB(r.bytes)})`));
+        }
+        const left = new Set(toShell.map((e) => e.path));
+        files = files.filter((e) => !left.has(e.path));
+        if (!files.length) return { ok: true, result: `In the shell now, ready for shell commands (ffmpeg, unzip…) – not in /workspace:\n${shellNote.join('\n')}`, display: { files: shellNote.slice(0, 20), count: shellNote.length }, meta: { surface: 'linux-shell' } };
+      }
       if (files.length > MAX_IMPORT_FILES) throw new Error(`That folder has ${files.length} files – import a sub-folder or single files (limit ${MAX_IMPORT_FILES}).`);
       const total = files.reduce((n, e) => n + (e.size || 0), 0);
       if (total > MAX_IMPORT_BYTES) throw new Error(`That is ${fmtKB(total)} in total – too much to copy at once (limit ${fmtKB(MAX_IMPORT_BYTES)}).`);
@@ -226,7 +243,8 @@ export async function runPhoneTool(name, args, ctx) {
         done.push(wsPut(ctx.workspace, dest, bytes));
       }
       const show = done.slice(0, 40).join('\n');
-      return { ok: true, result: `Copied ${done.length} file${done.length === 1 ? '' : 's'} into /workspace:\n${show}${done.length > 40 ? `\n… and ${done.length - 40} more (use list_files)` : ''}`, display: { files: done.slice(0, 20), count: done.length } };
+      const sh = shellNote.length ? `\nToo big for /workspace, so in the shell instead:\n${shellNote.join('\n')}` : '';
+      return { ok: true, result: `Copied ${done.length} file${done.length === 1 ? '' : 's'} into /workspace:\n${show}${done.length > 40 ? `\n… and ${done.length - 40} more (use list_files)` : ''}${sh}`, display: { files: done.slice(0, 20), count: done.length } };
     }
     case 'phone_write': {
       const f = needFolder(ctx);

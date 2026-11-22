@@ -21,6 +21,7 @@ import { canControlBrowser } from '../browsercontrol.js';
 import { canUseShell } from '../shell.js';
 import { applyToolset } from '../toolset.js';
 import { privateFlags } from '../private.js';
+import { pcList } from '../pcfiles.js';
 /** notifications, texts & calls, place triggers: each on Android (or with its test stand-in) and switched on. */
 const privateOn = () => privateFlags(state.settings, { notify: !!globalThis.__ocmNotify || Capacitor.isNativePlatform(), messages: !!globalThis.__ocmMessages || Capacitor.isNativePlatform(), geofence: !!globalThis.__ocmGeofence || Capacitor.isNativePlatform() });
 
@@ -91,7 +92,7 @@ const convIsRp = (c) =>
   c?.group?.members?.length ? c.group.members.some((id) => rpPersonaFlag(state.settings.personas.find((p) => p.id === id))) : rpPersonaFlag(state.settings.personas.find((p) => p.id === c?.personaId));
 const toolsOn = (conv = state.current) => conv?.tools ?? chatPersona(conv)?.tools ?? (convIsRp(conv) ? pref('toolsRp') : pref('tools'));
 const enabledTools = (conv = state.current) => applyToolset(enabledToolsAll(conv), chatPersona(conv)?.toolset);
-const enabledToolsAll = (conv = state.current) => ({ web: pref('toolWeb'), python: pref('toolPython'), files: true, phone: canUsePhoneFolder() && pref('toolPhone'), intents: canOpenApps() && pref('toolIntents'), device: canUseDevice() && pref('toolDevice'), phonectl: canUsePhoneCtl() && pref('toolPhoneCtl'), private: privateOn(), skills: (state.settings.agentSkills || []).filter((k) => k.enabled !== false), delegate: pref('toolDelegate'), creator: pref('toolCreate'), browser: canControlBrowser() && pref('toolBrowser'), shell: canUseShell() && pref('toolShell'), preview: canControlBrowser() && pref('toolPreview'), modAuthor: !!(pref('modTools') || chatPersona(conv)?.modTools), autonomy: true, goal: conv?.goal || null, planMode: !!conv?.planMode, plan: conv?.plan || null, advisor: !!pref('advisorModel') && (state.models.some((m) => m.id === pref('advisorModel')) || (isCcModel(pref('advisorModel')) && !!hooks.ccJobModels?.().length)), claudecode: (pref('toolClaudeCode') && hooks.ccTaskInfo?.(conv)) || false });
+const enabledToolsAll = (conv = state.current) => ({ web: pref('toolWeb'), python: pref('toolPython'), files: true, phone: canUsePhoneFolder() && pref('toolPhone'), pc: pcList(state.settings).length ? pcList(state.settings) : false, intents: canOpenApps() && pref('toolIntents'), device: canUseDevice() && pref('toolDevice'), phonectl: canUsePhoneCtl() && pref('toolPhoneCtl'), private: privateOn(), skills: (state.settings.agentSkills || []).filter((k) => k.enabled !== false), delegate: pref('toolDelegate'), creator: pref('toolCreate'), browser: canControlBrowser() && pref('toolBrowser'), shell: canUseShell() && pref('toolShell'), preview: canControlBrowser() && pref('toolPreview'), modAuthor: !!(pref('modTools') || chatPersona(conv)?.modTools), autonomy: true, goal: conv?.goal || null, planMode: !!conv?.planMode, plan: conv?.plan || null, advisor: !!pref('advisorModel') && (state.models.some((m) => m.id === pref('advisorModel')) || (isCcModel(pref('advisorModel')) && !!hooks.ccJobModels?.().length)), claudecode: (pref('toolClaudeCode') && hooks.ccTaskInfo?.(conv)) || false });
 
 // ---------- preferences ----------
 const pref = (k) => state.settings.prefs?.[k] ?? PREF_DEFAULTS[k];

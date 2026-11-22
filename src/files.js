@@ -212,6 +212,7 @@ async function readZip(file) {
 
 /** How a text attachment is presented to the model inside the user message. */
 export function fileToPrompt(f, toolsOn) {
+  if (f.video) return `<video name="${f.name}" info="${f.note || ''}">\n${f.text}\n</video>`; // recorded into the chat's folder (decision 229)
   if (f.zip) {
     if (toolsOn) return `<archive name="${f.name}" extracted_to="/workspace/${f.folder}/" info="${f.note}">\n${f.listing.split('\n').slice(0, 300).join('\n')}\n</archive>`;
     return `<archive name="${f.name}" info="${f.note}${f.truncated ? ', text truncated' : ''}">\n${f.text || '(no text files)'}\n</archive>`;

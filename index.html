@@ -160,7 +160,7 @@
           <button class="set-item" data-page="rppreset"><span class="set-ico">🎛</span><span class="set-txt"><b>Roleplay presets</b><small>Presets with their own model, prompts and samplers; regex</small></span><span class="chev">›</span></button>
           <div class="set-group">Agent</div>
           <button class="set-item" data-page="tools"><span class="set-ico">🛠</span><span class="set-txt"><b>Tools &amp; agent</b><small>Web, Python, Linux, browser, permissions, skills, mods</small></span><span class="chev">›</span></button>
-          <button class="set-item" data-page="connect"><span class="set-ico">🔌</span><span class="set-txt"><b>Connections</b><small>MCP servers, PC agents, automation, terminal</small></span><span class="chev">›</span></button>
+          <button class="set-item" data-page="connect"><span class="set-ico">🔌</span><span class="set-txt"><b>Connections</b><small>MCP servers, PC agents, files on your PC, automation, terminal</small></span><span class="chev">›</span></button>
           <div class="set-group">App</div>
           <button class="set-item" data-page="voice"><span class="set-ico">🔊</span><span class="set-txt"><b>Voice</b><small>Read aloud, dictation, voice mode</small></span><span class="chev">›</span></button>
           <button class="set-item" data-page="notify"><span class="set-ico">🔔</span><span class="set-txt"><b>Notifications &amp; background</b><small>Reply notifications, retries, characters writing first</small></span><span class="chev">›</span></button>
@@ -522,6 +522,20 @@
             </div>
             <a class="hint" href="https://github.com/amon28/chronicle-harness/blob/main/scripts/acp-bridge.py" target="_blank" rel="noopener">Get acp-bridge.py ↗</a>
           </details>
+          <details id="pcf-box" class="git-box conn-card">
+            <summary><span class="b-ico">🗂</span><span class="b-txt"><b>Files on my PC</b><small>Let the assistant read – and, if you allow it, save – files in folders you share</small></span><span class="chev">›</span></summary>
+            <p class="hint">On the computer, run <code>python3 pc-files.py ~/Documents</code> with the folders to share (add <code>--write</code> to let it save files; it never deletes). It prints a QR code to scan here, or an address and a secret to type. <code>--autostart</code> keeps it running from every log-in; <code>--full</code> gives full control (every file, and commands – asked first). <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Only the folders you name are reachable, nothing above them, and hidden files (.git, .env, .ssh…) are left out. Saving follows the chat's mode: in Review the app asks you before each save, in Read-only nothing is saved. Use it on your own Wi-Fi, or over Tailscale/WireGuard from elsewhere – anyone with the address and the secret can read those folders. Stop the script when you are done. Python 3.8 or newer, nothing to install.</span></p>
+            <div id="pcf-list" class="persona-list"></div>
+            <button id="pcf-scan" class="primary-btn" hidden>📷 Scan the QR</button>
+            <div class="row gap-sm wrap">
+              <input id="pcf-name" class="field" placeholder="Name, e.g. My laptop" />
+              <input id="pcf-url" class="field" placeholder="http://192.168.1.20:8766 (or paste the chronicle://pc link)" autocomplete="off" spellcheck="false" />
+              <input id="pcf-secret" class="field" type="password" placeholder="secret" autocomplete="off" />
+              <button id="pcf-add" class="ghost-btn">+ Connect</button>
+            </div>
+            <p id="pcf-status" class="hint"></p>
+            <a class="hint" href="https://github.com/amon28/chronicle-harness/blob/main/scripts/pc-files.py" target="_blank" rel="noopener">Get pc-files.py ↗</a>
+          </details>
           <details id="auto-box" class="git-box conn-card">
             <summary><span class="b-ico">🤖</span><span class="b-txt"><b>Automation</b><small>Let Tasker, MacroDroid… run prompts and recipes here</small></span><span class="chev">›</span></summary>
             <p class="hint">Let another app run a prompt or a recipe here and get the reply back. <button type="button" class="info-btn" aria-label="More about this" aria-expanded="false">i</button><span class="info-text" hidden>Each app gets its own token; a link without one runs nothing.<br>Open <code>chronicle://run?token=…&amp;prompt=…</code> (Tasker: Send Intent, action <code>android.intent.action.VIEW</code>, data = the link). Optional: <code>recipe=name&amp;args=…</code> instead of prompt, <code>persona=…</code>, <code>id=…</code>. The reply comes back as the broadcast <code>dev.chronicle.app.RESULT</code> (extras <code>text</code>, <code>ok</code>, <code>error</code>, <code>request_id</code>, <code>chat_id</code>) – only to that app when it is Tasker or MacroDroid, or to <code>reply_package=…</code>.</span></p>
@@ -770,7 +784,7 @@
           <div id="pv-admin-row" hidden>
             <label class="label">Admin API key <span class="dim">(optional – only to show what this account has spent)</span></label>
             <input id="pv-admin" class="field" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-admin…" />
-            <p class="hint">An ordinary API key cannot read spending, and no key can read the credit balance (that is on platform.claude.com › Billing). An Admin key (Console › Settings › Admin keys) can – it shows spend for today, 7 days and this month, by model, 4–24 h behind and before credits. <b>It is a powerful key</b> (it can also manage your organization): add it only if you are fine keeping it on this phone. Stored like your other keys, left out of backups, sent only to Anthropic.</p>
+            <p class="hint">An ordinary API key cannot read spending, and no key can read the credit balance (that is on platform.claude.com › Billing). An Admin key (Console › Settings › Admin keys) can – it shows spend for today, 7 days and this month, by model, 4–24 h behind and before credits. <b>An individual Console account has no Admin keys:</b> Anthropic offers them only to organizations, so first set one up in Console › Settings › Organization, as its admin. <b>It is a powerful key</b> (it can also manage your organization): add it only if you are fine keeping it on this phone. Stored like your other keys, left out of backups, sent only to Anthropic.</p>
           </div>
           <div id="pv-oai">
           <label class="label">Send the key as</label>
@@ -1237,6 +1251,8 @@
       <div class="sheet-card">
         <div class="menu-list">
           <button id="cmp-attach" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.5l-8.5 8.5a5 5 0 01-7-7L14 5.5a3.3 3.3 0 014.7 4.7L10.2 18.7a1.7 1.7 0 01-2.4-2.4L15.5 8.6"/></svg><span class="cm-label">Attach a file or image</span></button>
+          <button id="cmp-photo" class="menu-item cm-item" hidden><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span class="cm-label">Take a photo</span></button>
+          <button id="cmp-video" class="menu-item cm-item" hidden><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg><span class="cm-label">Record a video</span></button>
           <button id="cmp-persona" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg><span class="cm-label">Change persona</span></button>
           <button id="cmp-impersonate" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L17 4l3 3L8 19z"/></svg><span class="cm-label">Write my next message</span></button>
           <button id="cmp-ptest" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/></svg><span class="cm-label">Prompt test</span></button>

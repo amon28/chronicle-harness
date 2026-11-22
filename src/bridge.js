@@ -3,7 +3,7 @@
 // otherwise. Both are reconciled by hash and identity, not copied blind: a file deleted on either side
 // is deleted on the other, and a file that cannot cross is remembered as refused instead of retried.
 import { wsPut, wsDelete, saveWorkspace, sandbox, fileMap } from './sandbox.js';
-import { listFolder, readPhoneFile, folderLocalPath, exportLinuxFile, canExportLinux } from './phonefolder.js';
+import { listFolder, readPhoneFile, folderLocalPath, exportLinuxFile, canExportLinux, copyIntoShell, canCopyIntoShell } from './phonefolder.js';
 import { saveToPhone } from './phonetools.js';
 import { sha256Hex } from './hash.js';
 import { reconcile } from './mirror.js';
@@ -281,15 +281,26 @@ export async function syncPhoneIn(folder, convId, w, { refresh = false } = {}) {
   }
   const seen = new Set();
   const notes = [];
+  const big = [];
   let wrote = 0;
   for (const e of entries) {
     if (!e.path) continue;
     seen.add(e.path);
     const known = state[e.path];
     const key = { size: e.size || 0, mtime: e.mtime || 0 };
-    if (known && known.size === key.size && known.mtime === key.mtime) continue;
+    if (known && known.size === key.size && known.mtime === key.mtime) {
+      if (known.skipped) big.push(e.path + ' (' + MB(key.size) + ')');
+      continue;
+    }
     if (key.size > LIMITS.phoneFile) {
+      // too big to mirror on every command: phone_import brings it in when it is needed (streamed, any size). A copy
+      // of an older version is taken out, so the shell never works on a stale file
+      if (known && !known.skipped) {
+        await fs.removeFile(phoneDir(convId), e.path).catch(() => {});
+        delete w.phoneState.out[e.path];
+      }
       state[e.path] = { ...key, skipped: true };
+      big.push(e.path + ' (' + MB(key.size) + ')');
       continue;
     }
     try {
@@ -314,7 +325,28 @@ export async function syncPhoneIn(folder, convId, w, { refresh = false } = {}) {
   saveWorkspace(w);
   if (cut) notes.push('the phone folder has more than ' + LIMITS.phoneFiles + ' entries: only the first ' + LIMITS.phoneFiles + ' were copied into /phone, and nothing was removed from /phone because of it – link a smaller folder');
   if (wrote) notes.unshift(wrote + ' phone file' + (wrote === 1 ? '' : 's') + ' copied into /phone');
+  // said every time, so the assistant does not go looking for them in /phone or under /storage
+  if (big.length) notes.push('not in /phone (over ' + MB(LIMITS.phoneFile) + ', copied only when asked): ' + big.slice(0, 5).join(', ') + (big.length > 5 ? ' and ' + (big.length - 5) + ' more' : '') + ' – phone_import one with to_shell:true to get it at /phone/<path>');
   return { note: notes.join('; '), wrote };
+}
+
+/**
+ * A file too big to mirror, brought into the shell's /phone copy on request (decision 224): streamed by Android, any
+ * size. Remembered as in sync both ways, so the next command neither copies it again nor offers to save it back.
+ * → { ok, where, bytes, already } – already: /phone is the folder itself (bound), nothing to copy.
+ */
+export async function bringIntoShell(folder, convId, w, path, { bound = false, onProgress } = {}) {
+  if (bound) return { ok: true, where: PHONE + '/' + path, already: true };
+  if (!canCopyIntoShell()) return { ok: false, why: 'this needs the Android app' };
+  const r = await copyIntoShell(folder, path, phoneDir(convId) + '/' + path, onProgress);
+  const after = await fs.statEntry(phoneDir(convId), path);
+  if (!after || after.size !== r.bytes) return { ok: false, why: 'the copy in Linux does not have the whole file' };
+  w.phoneState = { in: fileMap(w.phoneState?.in), out: fileMap(w.phoneState?.out) };
+  const listed = (await listFolder(folder, path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '', false).catch(() => [])).find((e) => e.path === path);
+  w.phoneState.in[path] = { size: listed?.size ?? r.bytes, mtime: listed?.mtime || 0, skipped: false };
+  w.phoneState.out[path] = after;
+  saveWorkspace(w);
+  return { ok: true, where: PHONE + '/' + path, bytes: r.bytes };
 }
 
 /** What the shell wrote under /phone goes to the linked folder, following this chat's mode. */

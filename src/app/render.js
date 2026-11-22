@@ -19,7 +19,8 @@ import { fileChip, openModels } from './composer.js';
 import { applyRegexScripts } from '../regexscripts.js';
 import { $, appMode, cardFor, chatPersona, chatPrompt, convIsRp, copyText, currentModel, el, enabledTools, fmtTokens, fmtUsage, groupMembers, hooks, isGroup, mdOpts, memoryOn, personaById, personas, pref, renderMarkdown, rpPersonaFlag, state, toast, toolsOn, userPersona } from './core.js';
 import { undoFileChanges, apiMessages, autoGrow, contextLimit, continueReply, undoMemory, openMsgMenu, editMessage, editReply, loreFor, nextSpeaker, pager, regenerate, rpCtx, storyOn, switchAlt, switchVersion } from './engine.js';
-import { openImageViewer, openMemory, openWsFile, wsCacheSync } from './extras.js';
+import { openExternal, openImageViewer, openMemory, openWsFile, wsCacheSync } from './extras.js';
+import { isCreditsOut } from '../anthropic.js';
 import { openChatSheet, openGroupEditor, openPersonaEditor } from './personas-ui.js';
 import { openSettings } from './settings.js';
 
@@ -639,6 +640,21 @@ function messageNode(msg, index, reuse = null) {
     if (msg.streaming && !msg.content && !busyTool && (!msg.reasoning || thinking === 'hidden'))
       body.innerHTML = `<span class="dots"><i></i><i></i><i></i></span>${msg.reasoning ? '<span class="dots-label">thinking</span>' : ''}`;
     col.append(body);
+    // pictures the assistant showed you (show_image, decision 225): under the reply, not folded into the tool steps
+    const shown = [...(msg.rounds || []).flatMap((r) => r.calls.filter((c) => c.name === 'show_image' && c.display?.shown?.length).map((c) => c.display)), ...(msg.shownImages || [])];
+    for (const d of shown) {
+      const imgs = el('div', 'msg-images shown-images');
+      for (const x of d.shown) {
+        const i = el('img');
+        i.src = x.url;
+        i.alt = x.name;
+        i.title = x.path;
+        i.onclick = () => openImageViewer(x.url, x.name);
+        imgs.append(i);
+      }
+      col.append(imgs);
+      if (d.caption) col.append(el('div', 'shown-caption dim', d.caption));
+    }
     const choices = !msg.streaming && index === state.current.messages.length - 1 ? parseChoices(msg.content) : [];
     if (choices.length) {
       const row = el('div', 'choice-chips');
@@ -652,6 +668,20 @@ function messageNode(msg, index, reuse = null) {
     if (msg.proactive && !msg.streaming) col.append(el('div', 'msg-note proactive-note', '💬 Wrote first, while you were away'));
     if (msg.note && msg.streaming) col.append(el('div', 'msg-note', msg.note));
     if (msg.error) col.append(el('div', 'msg-error', msg.error));
+    // out of Anthropic credits (decision 227): top up in the browser, or send it again with another model
+    if (msg.error && !msg.streaming && isCreditsOut(msg.error)) {
+      const row = el('div', 'msg-resume-row credits-row');
+      const bill = el('button', 'act', '💳 Open Billing');
+      bill.onclick = () => openExternal('https://platform.claude.com/settings/billing');
+      const other = el('button', 'act', '↻ Another model');
+      other.title = 'Send it again with a model from another provider';
+      other.onclick = () => {
+        openMsgMenu(state.current.messages.indexOf(msg));
+        document.getElementById('mm-retry-model')?.click();
+      };
+      row.append(bill, other);
+      col.append(row);
+    }
     // an agent reply that stopped after some tool steps goes on from them – Retry starts it over (decision 199)
     const resumable = !msg.streaming && hooks.canResume?.(state.current, msg);
     if (resumable && msg.error) {

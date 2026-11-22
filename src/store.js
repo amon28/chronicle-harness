@@ -127,7 +127,7 @@ export const secureStorageActive = () => secureOk;
 
 /** Split settings into { secrets, clean } – clean has every key/token blanked. */
 function splitSecrets(s) {
-  const secrets = { providers: {}, providerAdmin: {}, mcp: {} };
+  const secrets = { providers: {}, providerAdmin: {}, mcp: {}, pc: {} };
   const clean = { ...s };
   for (const k of TOP_SECRETS) {
     if (s[k]) secrets[k] = s[k];
@@ -142,6 +142,11 @@ function splitSecrets(s) {
     if (m.token) secrets.mcp[m.id] = m.token;
     return { ...m, token: '' };
   });
+  // Files on my PC (decision 223): the secret pc-files.py printed
+  clean.pcFiles = (s.pcFiles || []).map((p) => {
+    if (p.secret) secrets.pc[p.id] = p.secret;
+    return { ...p, secret: '' };
+  });
   return { secrets, clean };
 }
 function mergeSecrets(s, sec) {
@@ -152,6 +157,7 @@ function mergeSecrets(s, sec) {
     if (!p.adminKey && sec.providerAdmin?.[p.id]) p.adminKey = sec.providerAdmin[p.id];
   }
   for (const m of s.mcpServers || []) if (!m.token && sec.mcp?.[m.id]) m.token = sec.mcp[m.id];
+  for (const p of s.pcFiles || []) if (!p.secret && sec.pc?.[p.id]) p.secret = sec.pc[p.id];
   return s;
 }
 async function readSecrets() {
@@ -198,7 +204,7 @@ export async function initSettings() {
   const sec = await readSecrets();
   mergeSecrets(settingsCache, sec);
   // first run with secure storage: move any plain-text keys out of IndexedDB
-  if (secureOk && s && (TOP_SECRETS.some((k) => s[k]) || (s.providers || []).some((p) => p.apiKey || p.adminKey) || (s.mcpServers || []).some((m) => m.token))) {
+  if (secureOk && s && (TOP_SECRETS.some((k) => s[k]) || (s.providers || []).some((p) => p.apiKey || p.adminKey) || (s.mcpServers || []).some((m) => m.token) || (s.pcFiles || []).some((p) => p.secret))) {
     saveSettings(settingsCache);
   }
   try {

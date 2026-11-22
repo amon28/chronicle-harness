@@ -146,6 +146,38 @@ function openSheet(id, open) {
   s.classList.toggle('open', open);
   s.setAttribute('aria-hidden', String(!open));
 }
+/**
+ * A small menu anchored to a button (the 📎 and tools menus): placed now, and again whenever the screen size changes
+ * while it is open – tapping the button closes the keyboard, the message box drops to the bottom, and a menu placed
+ * only once was left stuck in the middle of the screen (decision 228).
+ */
+function anchorPopover(id, place) {
+  const s = $(id);
+  place();
+  requestAnimationFrame(place); // its height is known once it is drawn
+  let t = 0;
+  const again = () => {
+    if (!s.classList.contains('open')) {
+      window.removeEventListener('resize', again);
+      window.visualViewport?.removeEventListener('resize', again);
+      return;
+    }
+    place();
+    // the keyboard slides away over a few frames: once more after it has settled
+    clearTimeout(t);
+    t = setTimeout(() => s.classList.contains('open') && place(), 250);
+  };
+  window.addEventListener('resize', again);
+  window.visualViewport?.addEventListener('resize', again);
+}
+/** place(): the card above the button, inside the screen. */
+function placeAbove(card, btn, width) {
+  const r = btn.getBoundingClientRect();
+  const w = Math.min(width, window.innerWidth - 16);
+  card.style.width = w + 'px';
+  card.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px';
+  card.style.top = Math.max(8, r.top - card.getBoundingClientRect().height - 8) + 'px';
+}
 // the top one: sheets opened over others (the text, choose and picker sheets) come later in the page
 const anySheetOpen = () => [...document.querySelectorAll('.sheet.open')].pop() || null;
 
@@ -981,4 +1013,4 @@ async function persist(conv = state.current) {
   if (c === state.current) updateShortcuts();
 }
 
-export { anySheetOpen, autoTitle, chatDeleted, loadConvs, markDeleted, newChat, openDrawer, openSheet, persist, refreshUsage, renderConvList, resetUsageAt, selectConv, setMode, usageAt };
+export { anchorPopover, placeAbove, anySheetOpen, autoTitle, chatDeleted, loadConvs, markDeleted, newChat, openDrawer, openSheet, persist, refreshUsage, renderConvList, resetUsageAt, selectConv, setMode, usageAt };

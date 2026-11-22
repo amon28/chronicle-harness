@@ -7,7 +7,9 @@ import { isFree, isContributor, replacementFor, trackNewModels } from '../models
 import { DEFAULT_SNIPPETS, applySnippet } from '../snippets.js';
 import { projectCommands } from '../projectfiles.js';
 import { looksText, bytesToText } from '../sandbox.js';
-import { newChat, openDrawer, openSheet, persist } from './chatlist.js';
+import { canUseCamera, cameraError, recordVideo, takePhoto, videoAttachment } from '../camera.js';
+import { canUseShell } from '../shell.js';
+import { anchorPopover, newChat, openDrawer, openSheet, persist, placeAbove } from './chatlist.js';
 import { $, appMode, chatPersona, convIsRp, currentModel, effortOptions, el, fmtTokens, groupMembers, hooks, isGroup, personas, pref, rpPersonaFlag, state, supportsImages, toast, toolsOn, uid, userName } from './core.js';
 import { avatarEl } from '../personas.js';
 import { autoGrow, impersonate, input, send } from './engine.js';
@@ -285,16 +287,38 @@ $('#drawer-new').onclick = () => {
 let attaching = 0;
 // the paperclip opens a small menu of quick actions (like Chub's ⋮ by the message box)
 $('#attach-btn').onclick = () => {
-  const r = $('#attach-btn').getBoundingClientRect();
   $('#cmp-impersonate').hidden = !state.current?.messages?.some((m) => !m.greeting);
+  $('#cmp-photo').hidden = $('#cmp-video').hidden = !canUseCamera();
   openSheet('#compose-menu', true);
-  const card = $('#compose-menu .sheet-card');
-  card.style.width = Math.min(264, window.innerWidth - 16) + 'px';
-  card.style.left = Math.max(8, r.left) + 'px';
-  requestAnimationFrame(() => (card.style.top = Math.max(8, r.top - card.getBoundingClientRect().height - 8) + 'px'));
+  anchorPopover('#compose-menu', () => placeAbove($('#compose-menu .sheet-card'), $('#attach-btn'), 264));
 };
 const closeCompose = () => openSheet('#compose-menu', false);
 $('#cmp-attach').onclick = () => (closeCompose(), $('#file-input').click());
+// the camera (decision 229): a photo is attached like a picked picture; a video is recorded into the chat's folder
+$('#cmp-photo').onclick = async () => {
+  closeCompose();
+  try {
+    const f = await takePhoto();
+    if (f) await attachFiles([f]);
+  } catch (e) {
+    const why = cameraError(e);
+    if (why) toast(why, 4000);
+  }
+};
+$('#cmp-video').onclick = async () => {
+  closeCompose();
+  if (!state.current) newChat();
+  try {
+    const v = await recordVideo(state.current.id);
+    if (!v) return;
+    state.pending.push(videoAttachment(v, { hasLinux: canUseShell() }));
+    renderAttachments();
+    toast(`Recorded ${v.name} – it is in this chat's folder (videos/)`);
+  } catch (e) {
+    const why = cameraError(e);
+    if (why) toast(why, 4500);
+  }
+};
 $('#cmp-persona').onclick = () => (closeCompose(), hooks.openChatSheet?.());
 $('#cmp-impersonate').onclick = () => (closeCompose(), impersonate());
 $('#cmp-ptest').onclick = () => (closeCompose(), $('#cm-ptest').click());
@@ -480,9 +504,14 @@ async function refreshModels(silent) {
     const failed = new Set(models.failedProviders || []);
     const partial = !!models.goFailed || failed.size > 0;
     if (partial) {
+      const keep = (m) => (models.goFailed && !m.source) || (m.source === 'custom' && failed.has(m.providerId));
+      const kept = state.models.filter(keep);
+      // a provider that did not answer gives only stand-ins for its typed-in ids (named by the bare id, abilities
+      // guessed): the last good entry for the same id wins over them, so "Claude Opus 5.5" does not turn into "claude-opus-5-5"
+      const keptIds = new Set(kept.map((m) => m.id));
       const ids = new Set(models.map((m) => m.id));
-      const kept = state.models.filter((m) => !ids.has(m.id) && ((models.goFailed && !m.source) || (m.source === 'custom' && failed.has(m.providerId))));
-      models = [...kept, ...models];
+      const failedOwn = (m) => m.source === 'custom' && failed.has(m.providerId) && keptIds.has(m.id);
+      models = [...kept.filter((m) => !ids.has(m.id) || failedOwn(models.find((x) => x.id === m.id))), ...models.filter((m) => !failedOwn(m))];
     }
     // …and it is asked again a little later (no restart needed): after 10 s, 30 s, 90 s
     if (partial && goRetries < 3) setTimeout(() => refreshModels(true), [10000, 30000, 90000][goRetries++]);

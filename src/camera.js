@@ -1,0 +1,70 @@
+// The 📎 menu's camera (decision 229): a photo from the camera app attached like a picked picture, or a video recorded
+// straight into the chat's folder in Linux (/workspace/videos/…) – videos are too big and too binary to be attachments.
+// The camera app takes them, so the app needs no CAMERA permission (PhonePlugin.capture).
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { bridgeBytes } from './bridgebytes.js';
+import { downscaleJpeg } from './phonectl.js';
+import { workDir } from './shellfs.js';
+
+const native = Capacitor.isNativePlatform() ? registerPlugin('Phone') : null;
+const phone = () => globalThis.__ocmPhone || native;
+export const canUseCamera = () => typeof phone()?.capture === 'function';
+
+const stamp = (d = new Date()) => {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+};
+const MB = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+/** A camera-app error as words for a toast; null when the user just closed the camera. */
+export function cameraError(e) {
+  const code = e?.code || '';
+  if (code === 'CANCELLED') return null;
+  if (code === 'NO_APP') return 'No camera app on this phone can do that.';
+  if (code === 'BACKGROUND') return 'Chronicle was not on screen, so the camera could not open.';
+  return `The camera did not work: ${e?.message || e}`;
+}
+
+/** → a File (JPEG, at most 1600 px – a phone photo is often over the 10 MB attachment limit), or null when cancelled. */
+export async function takePhoto() {
+  let r;
+  try {
+    r = await phone().capture({});
+  } catch (e) {
+    if (e?.code === 'CANCELLED') return null;
+    throw e;
+  }
+  const raw = r?.bytes instanceof Uint8Array ? r.bytes : await bridgeBytes(r || {});
+  if (!raw?.byteLength) return null;
+  let bytes = raw;
+  try {
+    bytes = await downscaleJpeg(raw);
+  } catch {
+    /* the photo as it came */
+  }
+  return new File([bytes], `photo-${stamp()}.jpg`, { type: 'image/jpeg' });
+}
+
+/**
+ * A video recorded into this chat's folder. → { path: '/workspace/videos/…', size } or null when cancelled.
+ * The bytes never pass through the app: Android moves the camera app's file into the chat's shell storage.
+ */
+export async function recordVideo(convId) {
+  const name = `video-${stamp()}.mp4`;
+  let r;
+  try {
+    r = await phone().capture({ video: true, dest: `${workDir(convId)}/videos/${name}` });
+  } catch (e) {
+    if (e?.code === 'CANCELLED') return null;
+    throw e;
+  }
+  if (!r?.size) return null;
+  return { path: `/workspace/videos/${name}`, name, size: r.size };
+}
+
+/** The attachment for a recorded video: no bytes (they are in the chat's folder), a note the model reads instead. */
+export function videoAttachment(v, { hasLinux = true } = {}) {
+  const where = hasLinux
+    ? `It is in this chat's Linux shell at ${v.path} (also in the workspace as videos/${v.name} when it is small enough) – use the shell (ffprobe, ffmpeg) to look at it, e.g. to cut frames you can view.`
+    : `It is saved in this chat's folder as videos/${v.name}; working with it (ffmpeg) needs the built-in Linux, which is not set up yet.`;
+  return { kind: 'file', name: v.name, size: v.size, lang: '', note: `video, ${MB(v.size)}`, text: `[A video the user just recorded with the phone's camera: ${v.name}, ${MB(v.size)}. ${where}]`, truncated: false, video: true };
+}

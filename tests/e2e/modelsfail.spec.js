@@ -38,10 +38,13 @@ test("a custom provider that does not answer at a start keeps its models and the
   await app.locator('#model-list .model-item', { hasText: 'Claude Opus 5.5' }).click();
   await expect(app.locator('#model-name')).toHaveText('Claude Opus 5.5');
   // the next start: the provider is down, OpenCode answers
-  await app.route((u) => u.pathname.startsWith('/anthropic/v1/models'), (r) => r.fulfill({ status: 503, body: 'down' }));
+  // (a 400 is not retried by the SDK: the answer comes at once, as it does on a slow CI machine after its retries)
+  let failedAsks = 0;
+  await app.route((u) => u.pathname.startsWith('/anthropic/v1/models'), (r) => (failedAsks++, r.fulfill({ status: 400, contentType: 'application/json', body: '{"type":"error","error":{"type":"invalid_request_error","message":"down"}}' })));
   await app.reload();
   await app.waitForSelector('body[data-ready="1"]');
-  await app.waitForTimeout(1000);
+  await expect.poll(() => failedAsks, { timeout: 15000 }).toBeGreaterThan(0);
+  await app.waitForTimeout(1500);
   await expect(app.locator('#model-name')).toHaveText('Claude Opus 5.5');
   await app.click('#model-btn');
   await expect(app.locator('#model-list .model-item', { hasText: 'Claude Opus 5.5' })).toHaveCount(1);

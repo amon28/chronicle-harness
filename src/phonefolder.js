@@ -105,6 +105,20 @@ export async function folderLocalPath(f, path = '') {
     return null;
   }
 }
+/**
+ * One file of the linked folder streamed by Android into the shell's copy of it (dest: phone/<chat>/<path> under the
+ * app's shell storage), never through the app's memory – for files too big to mirror (a video for ffmpeg).
+ * onProgress(done, total). → { bytes }
+ */
+export async function copyIntoShell(f, path, dest, onProgress = null) {
+  const h = onProgress ? await impl().addListener?.('copyProgress', (e) => onProgress(e.done, e.total)) : null;
+  try {
+    return await impl().copyIntoShell({ uri: f.uri, path, dest });
+  } finally {
+    h?.remove?.();
+  }
+}
+export const canCopyIntoShell = () => typeof impl()?.copyIntoShell === 'function';
 export const removePhoneFile = (f, path) => impl().remove({ uri: f.uri, path });
 /** A file into the phone's Downloads/Chronicle folder. → { name, folder } */
 export const saveToDownloads = (name, mime, bytes) => impl().saveToDownloads({ name, mime, data: bytesToB64(bytes) });

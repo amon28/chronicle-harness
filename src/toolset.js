@@ -13,6 +13,7 @@ export const TOOL_GROUPS = [
   ['claudecode', '💻 Claude Code tasks (your Claude plan)'],
   ['creator', '🎭 Create personas, characters, lorebooks, snippets, recipes, packs, MCP servers'],
   ['phone', '📱 Phone folder'],
+  ['pc', '🖥 Files on my PC'],
   ['intents', '📲 Other apps (dialer, maps, calendar, alarms…)'],
   ['device', '🗓 Phone data (calendar, contacts, location, places nearby)'],
   ['phonectl', '📶 Phone status & controls'],

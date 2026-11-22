@@ -66,6 +66,15 @@ describe('Export everything', () => {
     expect(store.has('ocm.cache.models')).toBe(false);
     expect(r.stats.extras).toBe(3);
   });
+  it("a PC's secret (Files on my PC) is left out of a plain backup, carried by Export everything, and kept on Replace (decision 223)", async () => {
+    const s = { ...settings, pcFiles: [{ id: 'pc1', name: 'Laptop', url: 'http://pc:8766', secret: 'pc-secret' }] };
+    const plain = readBackup((await buildBackup(s)).zip);
+    expect(plain.data.settings.pcFiles[0]).toEqual({ id: 'pc1', name: 'Laptop', url: 'http://pc:8766' });
+    expect(readBackup((await buildBackup(s, { everything: true })).zip).data.settings.pcFiles[0].secret).toBe('pc-secret');
+    // a keyless backup restored here: the secret already on this phone stays
+    const r = await applyBackup(plain, 'replace', { personas: [], memories: [], pcFiles: [{ id: 'pc1', secret: 'pc-secret' }] });
+    expect(r.settings.pcFiles[0].secret).toBe('pc-secret');
+  });
   it('a git history of a chat that is not in the backup is not written', async () => {
     db.conversations.m.set('c1', { id: 'c1', updatedAt: 5, messages: [] });
     db.kvMove.kv.set('git:other', { head: 'x' });

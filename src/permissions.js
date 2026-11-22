@@ -13,6 +13,8 @@ export const PERMISSION_TOOLS = [
   ['delete_file', '🗑 Delete files'],
   ['phone_write', '📱 Write to the phone folder'],
   ['phone_delete', '📱 Delete in the phone folder'],
+  ['pc_write', '🖥 Save to my PC'],
+  ['pc_shell', '🖥 Run commands on my PC'],
   ['fetch_url', '🌐 Read web pages'],
   ['web_search', '🔍 Web search'],
   ['delegate', '🤝 Helper agents'],

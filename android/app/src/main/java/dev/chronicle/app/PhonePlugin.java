@@ -710,7 +710,12 @@ public class PhonePlugin extends Plugin {
         }
     }
 
-    /** Opens the camera app; → { path } of the JPEG it saved. Rejects BACKGROUND, NO_APP, CANCELLED. */
+    /**
+     * Opens the camera app; → { path, size } of the JPEG it saved – or, with video: true, of the video it recorded
+     * (decision 229). dest (optional, e.g. "work/<chat>/videos/v.mp4"): the file is moved there, under the app's shell
+     * storage (a chat's /workspace), so a big video reaches Linux without going through the app's memory.
+     * Rejects BACKGROUND, NO_APP, CANCELLED.
+     */
     @PluginMethod
     public void capture(PluginCall call) {
         if (!Launch.inFront(getActivity())) {
@@ -719,9 +724,10 @@ public class PhonePlugin extends Plugin {
         }
         try {
             sweepShare();
-            File f = new File(shareDir(), "photo-" + System.currentTimeMillis() + ".jpg");
+            boolean video = Boolean.TRUE.equals(call.getBoolean("video", false));
+            File f = new File(shareDir(), (video ? "video-" : "photo-") + System.currentTimeMillis() + (video ? ".mp4" : ".jpg"));
             Uri u = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", f);
-            Intent i = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            Intent i = new Intent(video ? MediaStore.ACTION_VIDEO_CAPTURE : MediaStore.ACTION_IMAGE_CAPTURE);
             i.putExtra(MediaStore.EXTRA_OUTPUT, u);
             i.setClipData(ClipData.newRawUri("photo", u)); // so the permission below reaches the camera app on every Android
             i.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -743,11 +749,45 @@ public class PhonePlugin extends Plugin {
         if (call == null) return;
         String path = call.getData().optString("photoPath", "");
         File f = new File(path);
+        // some camera apps ignore the place they were given for a video and hand back their own: copied from there
+        if (result != null && result.getResultCode() == Activity.RESULT_OK && !path.isEmpty() && (!f.isFile() || f.length() == 0) && result.getData() != null && result.getData().getData() != null) {
+            try (java.io.InputStream in = getContext().getContentResolver().openInputStream(result.getData().getData()); FileOutputStream out = new FileOutputStream(f)) {
+                if (in != null) {
+                    byte[] buf = new byte[1 << 20];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                }
+            } catch (Exception ignored) {
+            }
+        }
         if (result == null || result.getResultCode() != Activity.RESULT_OK || path.isEmpty() || !f.isFile() || f.length() == 0) {
             //noinspection ResultOfMethodCallIgnored
             f.delete();
-            call.reject("No photo was taken", "CANCELLED");
+            call.reject("Nothing was recorded", "CANCELLED");
             return;
+        }
+        String dest = call.getString("dest", "");
+        if (dest != null && !dest.isEmpty()) {
+            try {
+                File base = new File(getContext().getFilesDir(), "shell").getCanonicalFile();
+                File to = new File(base, dest.replaceFirst("^/+", "")).getCanonicalFile();
+                if (!to.getPath().startsWith(base.getPath() + "/work/")) throw new Exception("not a place for it");
+                File dir = to.getParentFile();
+                if (dir != null && !dir.isDirectory() && !dir.mkdirs()) throw new Exception("could not make the folder");
+                if (!f.renameTo(to)) {
+                    try (java.io.InputStream in = new java.io.FileInputStream(f); FileOutputStream out = new FileOutputStream(to)) {
+                        byte[] buf = new byte[1 << 20];
+                        int n;
+                        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    }
+                    //noinspection ResultOfMethodCallIgnored
+                    f.delete();
+                }
+                f = to;
+            } catch (Exception e) {
+                call.reject("Recorded, but it could not be put in the chat's folder: " + e.getMessage());
+                return;
+            }
         }
         JSObject r = new JSObject();
         r.put("path", f.getAbsolutePath());
