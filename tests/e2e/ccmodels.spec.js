@@ -222,8 +222,12 @@ test('the picker lists the plan\'s models before any message, under a "Claude" f
   expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })));
   expect(await app.locator('#model-list .cc-models-head').count()).toBe(0);
   await chip.click();
-  await expect(app.locator('#model-list .model-item:not(.cc-model)')).toHaveCount(0);
-  await expect(app.locator('#model-list .cc-models-head')).toContainText('Claude Code (your subscription)');
+  // Claude Code first, under its heading; then Claude from the providers, under theirs – nothing else (decision 237)
+  const heads = app.locator('#model-list .cc-models-head');
+  await expect(heads.first()).toContainText('Claude Code (your subscription)');
+  const others = await app.locator('#model-list .model-item:not(.cc-model) .model-title').allTextContents();
+  expect(others.every((n) => /claude/i.test(n))).toBe(true);
+  if (others.length) await expect(heads.nth(1)).toHaveText('Claude from your providers');
   await expect.poll(() => items.count()).toBeGreaterThan(1);
 });
 

@@ -164,6 +164,9 @@ export function watchIcons(root = document.body) {
   new MutationObserver((list) => {
     const pending = new Set();
     for (const m of list) {
+      // a streaming reply is hundreds of changes a second inside .md/.bubble: one check drops each whole record (decision 239)
+      const at = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+      if (at?.closest(SKIP)) continue;
       if (m.type === 'characterData') pending.add(m.target);
       for (const n of m.addedNodes) {
         if (n.nodeType === 1 && n.classList?.contains('ic-wrap')) continue;

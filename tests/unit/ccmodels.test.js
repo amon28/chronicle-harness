@@ -91,6 +91,9 @@ describe('routing a chat by its model', () => {
     expect(ccModelFor(conv, { ccPick: 'haiku' }, ready)).toBe('haiku');
     expect(ccModelFor(conv, { ccPick: 'haiku' }, { ...ready, ready: false })).toBeNull();
     expect(ccModelFor(conv, { ccPick: 'haiku' }, { ...ready, rp: true })).toBeNull();
+    // decision 238: a roleplay does not follow other chats' pick – but one picked in it (its acp) stays on Claude Code
+    expect(ccModelFor(conv, { ccPick: 'haiku' }, { ...ready, follow: false })).toBeNull();
+    expect(ccModelFor({ ...conv, acp: { agentId: 'acp_claude_phone', cc: true, model: 'sonnet' } }, {}, { ...ready, follow: false })).toBe('sonnet');
     expect(ccModelFor(conv, { ccPick: null }, ready)).toBeNull();
     expect(routeToClaudeCode(conv, { ccPick: 'haiku' }, ready)).toBe(true);
     expect(conv.acp).toEqual({ agentId: 'acp_claude_phone', cc: true, model: 'haiku' });

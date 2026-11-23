@@ -80,8 +80,16 @@ export function setupFence(input, { onChange }) {
     onChange?.();
     refresh();
   };
+  // runs on every keystroke and caret move (decision 239): a draft without ``` is not scanned at all, and the keyboard's
+  // settings (autocapitalize, spellcheck) are touched only when the caret goes into or out of a code block – setting
+  // them on the focused box on every key can make the keyboard re-sync and letters appear late
+  let was = null;
   const refresh = () => {
-    const f = fenceAt(input.value, input.selectionStart ?? 0);
+    const v = input.value;
+    const f = v.includes('```') ? fenceAt(v, input.selectionStart ?? 0) : null;
+    const key = f ? 'code:' + (f.lang || '') : '';
+    if (key === was) return;
+    was = key;
     bar.hidden = !f;
     input.classList.toggle('in-code', !!f);
     if (f) label.textContent = `code${f.lang ? ' · ' + f.lang : ''}`;
@@ -100,7 +108,7 @@ export function setupFence(input, { onChange }) {
     refresh();
   });
   input.addEventListener('input', refresh);
-  for (const ev of ['keyup', 'click', 'focus']) input.addEventListener(ev, refresh);
+  input.addEventListener('focus', refresh); // caret moves (taps, arrows) come as selectionchange
   document.addEventListener('selectionchange', () => {
     if (document.activeElement === input) refresh();
   });

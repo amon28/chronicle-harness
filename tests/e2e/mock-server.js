@@ -405,6 +405,19 @@ http
         send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
         return done();
       }
+      // a code box written slowly, then closed (decision 239: no colouring until it is finished)
+      if (/SLOWCODE/.test(lastText)) {
+        send({ choices: [{ delta: { content: 'Here it is:\n\n```js\n' } }] });
+        for (let i = 0; i < 30; i++) {
+          send({ choices: [{ delta: { content: `const value${i} = compute(${i}); // step ${i}\n` } }] });
+          await wait(50);
+        }
+        send({ choices: [{ delta: { content: '```\n\nCODEDONE and a few more words.' } }] });
+        await wait(600);
+        send({ choices: [{ delta: { content: ' The end.' } }] });
+        send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+        return done();
+      }
       if (/SLOWTOOL/.test(lastText) && !msgs.some((x) => x.role === 'tool')) {
         send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_w', type: 'function', function: { name: 'write_file', arguments: '{"path":"slow.txt","content":"' } }] } }] });
         for (let i = 0; i < 60; i++) {

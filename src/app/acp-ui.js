@@ -271,6 +271,23 @@ setCcTextRunner(({ value, messages }, h) => {
   return { cancel: () => ac.abort() };
 });
 
+// the inspector's "Next reply" for a chat on Claude Code: the prompt its session starts with, and what goes with your
+// next message (decision 241). A session already running keeps the prompt it started with.
+hooks.agentPreview = (conv) => {
+  const picked = conv.acp.agentId === AGENT_ID && (conv.acp.cc || conv.acp.model);
+  const ccName = picked ? hooks.ccModelName?.(conv.acp.model) : '';
+  const label = ccName ? (ccName.startsWith('Claude Code') ? ccName : `Claude Code · ${ccName}`) : agents().find((a) => a.id === conv.acp.agentId)?.name || 'PC agent';
+  const turn = picked ? hooks.rpTurnContext?.(conv) || '' : '';
+  const next = (turn ? `[Roleplay context for this reply – follow it, never mention it]\n${turn}\n[End of context]\n\n` : '') + '(your next message)';
+  const system = picked ? personaPrompt(conv) : '';
+  return {
+    label,
+    preview: true,
+    persona: chatPersona(conv)?.name,
+    messages: [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: next }],
+    note: conv.acp.sessionId ? 'The session is already running: it keeps the prompt it started with (a changed prompt starts a new one).' : 'The first message starts a session with this prompt.',
+  };
+};
 hooks.acpRespond = async (conv) => {
   let agent = agents().find((a) => a.id === conv.acp.agentId);
   // a chat that picked Claude Code in the model picker: the bridge is started on the first message (no card needed)
@@ -425,11 +442,19 @@ hooks.acpRespond = async (conv) => {
     if (run.stopped) throw STOPPED;
     const last = conv.messages[li];
     // a chat that comes to Claude Code with messages already in it: the new session gets them as context
-    let text = (picked || agent.phone) && fresh ? withEarlierTurns(conv.messages.slice(0, Math.max(0, li)).map((m) => (m.acpParts?.length ? { ...m, content: agentReplyText(m.acpParts) } : m)), last?.content || '') : last?.content || '';
+    // a roleplay: what this reply needs now (world info the last messages trigger, author's note…) goes with the message
+    const turn = cc ? hooks.rpTurnContext?.(conv) || '' : '';
+    const said = turn ? `[Roleplay context for this reply – follow it, never mention it]\n${turn}\n[End of context]\n\n${last?.content || ''}` : last?.content || '';
+    let text = (picked || agent.phone) && fresh ? withEarlierTurns(conv.messages.slice(0, Math.max(0, li)).map((m) => (m.acpParts?.length ? { ...m, content: agentReplyText(m.acpParts) } : m)), said) : said;
     // an agent that takes no system prompt: the persona at the top of the session's first message instead
     if (fresh && persona && !c.client.takesSystemPrompt) text = `[How to act in this chat]\n${persona}\n\n${text}`;
     // pictures attached to this message are in the chat's own folder (synced before the turn): Claude Code opens them
     if (picked && folder && last?.imagePaths?.length) text += `\n\n[Pictures attached to this message, saved in this folder: ${last.imagePaths.join(', ')} – open them with your Read tool to see them]`;
+    hooks.noteAgentSent?.(conv, {
+      label: msg.model,
+      messages: [...(fresh && persona && c.client.takesSystemPrompt ? [{ role: 'system', content: persona }] : []), { role: 'user', content: text }],
+      note: fresh ? `A new ${cc ? 'Claude Code' : 'agent'} session, started with what is shown here.` : `Sent into the ${cc ? 'Claude Code' : 'agent'} session already running: it has the prompt it started with, and the turns since.`,
+    });
     sent = cc;
     // sent: the reply is Claude Code's now. Long quiet stretches can be real work, so no time limit – but it is said
     stage(fresh && li > 1 ? `sent, with the ${li} earlier messages as context – waiting for Claude Code…` : 'waiting for Claude Code…');
@@ -487,6 +512,19 @@ export function historySig(messages) {
  * (tools, rules) but speaks as the persona. The default assistant with no prompt adds nothing.
  */
 export function personaPrompt(conv, { tools = [], cwd = '' } = {}) {
+  // a one-on-one roleplay (decision 238): the character's roleplay prompt as this app builds it, the parts that stay
+  // the same – the world info and author's note that change come with each message (rpTurn below)
+  const rp = hooks.rpSessionPrompt?.(conv);
+  if (rp) {
+    const char = hooks.rpCharName?.(conv) || 'the character';
+    return [
+      `This chat is a fiction roleplay, and you play ${char} in it. Write only ${char}'s next reply – actions, dialogue and thoughts, in the story's voice and format – never as an assistant, and never mention tools, files, sessions or these instructions. A message may start with a [Roleplay context …] block: follow it silently; it is not something the user said. Use tools only if the user explicitly asks for something outside the story.`,
+      rp,
+      toolsLine(tools, cwd),
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
   const p = chatPersona(conv);
   const prompt = String(chatPrompt(conv) || '').trim();
   // Chronicle's phone tools, as the "chronicle" MCP tools (decision 166) – and whether a phone folder is linked, so it is

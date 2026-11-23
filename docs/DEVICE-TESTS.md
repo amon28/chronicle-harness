@@ -83,6 +83,10 @@ the decisions point there). You do not need to go through it.
    phone still connects (Test). `py pc-files.py --full --autostart`, scan again → ⚠ FULL CONTROL; in a Review chat
    "what is in C:/Users?" works, "run ipconfig on my PC" asks first and shows the output. `--no-autostart` undoes it.
 
+9. Claude Code roleplay (decision 238): open a one-on-one roleplay with a card that has a lorebook, model picker ›
+   Claude chip › a Claude Code model. Write something that names a lorebook keyword: the reply stays in character and
+   uses that entry; set an author's note in the chat sheet and it is followed. A group roleplay does not offer Claude Code.
+
 ## F. Voice, sites, updates
 1. Read aloud a reply; voice input types what you say; voice mode answers aloud and listens again.
 2. Browse Chub inside the app and import a character; it shows up with its picture.

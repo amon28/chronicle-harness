@@ -142,6 +142,12 @@ for line in sys.stdin:
         if last.startswith("mcp "):
             threading.Thread(target=mcp_run, args=(m["id"], sid, last), daemon=True).start()
             continue
+        if last.endswith("show-prompt"):
+            # decision 238: what a roleplay sends – the session's system prompt and the whole message
+            s = sessions[sid]
+            chunk(sid, "SESSION<<" + s["sp"] + ">>MESSAGE<<" + text + ">>")
+            send({"jsonrpc": "2.0", "id": m["id"], "result": {"stopReason": "end_turn"}})
+            continue
         if last == "mcp-info":
             s = sessions[sid]
             chunk(sid, "servers: " + ",".join(x.get("name", "") + ":" + x.get("type", "stdio") for x in s["mcp"]) + " | meta: " + json.dumps(s["meta"].get("claudeCode", {}).get("options", {})) + " | cwd: " + s["cwd"] + " | sp: " + s["sp"][-160:])

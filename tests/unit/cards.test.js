@@ -59,5 +59,32 @@ describe('a PNG with two chara chunks', () => {
     const { card } = await readCard2(new File([both], 'mary.png'));
     expect(card.first_mes).toBe('The afternoon sun streams in.');
     expect(card.alternate_greetings).toHaveLength(2);
+  });  it('a forked card: the first card is it, not the longer card it was forked from after it', async () => {
+    const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64');
+    const base = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+    const fork = wpt(base, { chara: b64({ spec: 'chara_card_v2', data: { name: 'Mel', description: 'Yozora Mel usually just responds to "Mel."', first_mes: 'Ring station was on lockdown.' } }) });
+    const parent = wpt(base, { chara: b64({ spec: 'chara_card_v2', data: { name: 'Yozora Mel (Battle Android)', description: 'Ookami Mio usually just goes by "Mio." ' + 'Mio is an android. '.repeat(40), first_mes: 'Ring station was on lockdown.', creator_notes: 'My 296th bot.' } }) });
+    const extra = parent.subarray(8, parent.length - 12);
+    const both = new Uint8Array(fork.length + extra.length);
+    both.set(fork.subarray(0, fork.length - 12));
+    both.set(extra, fork.length - 12);
+    both.set(fork.subarray(fork.length - 12), fork.length - 12 + extra.length);
+    const { card } = await readCard2(new File([both], 'mel.png'));
+    expect(card.name).toBe('Mel');
+    expect(card.description).toContain('Yozora Mel');
+    expect(card.description).not.toContain('Mio');
+  });
+  it('a stub first and the card after it: the card', async () => {
+    const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64');
+    const base = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+    const stub = wpt(base, { chara: b64({ spec: 'chara_card_v2', data: { name: 'Mary', first_mes: '...' } }) });
+    const full = wpt(base, { chara: b64({ spec: 'chara_card_v2', data: { name: 'Mary', description: 'A guardian.', first_mes: 'Hello.' } }) });
+    const extra = full.subarray(8, full.length - 12);
+    const both = new Uint8Array(stub.length + extra.length);
+    both.set(stub.subarray(0, stub.length - 12));
+    both.set(extra, stub.length - 12);
+    both.set(stub.subarray(stub.length - 12), stub.length - 12 + extra.length);
+    const { card } = await readCard2(new File([both], 'mary.png'));
+    expect(card.first_mes).toBe('Hello.');
   });
 });

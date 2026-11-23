@@ -25,7 +25,11 @@ let fetching = null;
 const ready = () => cache('ccReady');
 const isReady = () => !!ready()?.installed;
 const rpHere = (conv = state.current) => !!conv && (convIsRp(conv) || isGroup(conv));
-const opts = (conv) => ({ ready: isReady(), agentId: AGENT_ID, rp: rpHere(conv) });
+// Claude Code as a chat's model: in one-on-one roleplays too (decision 238 – the card goes with the session, the
+// lorebook and author's note with each message), never in group chats (it plays one character in one session)
+const groupHere = (conv = state.current) => !!conv && isGroup(conv);
+// a roleplay does not follow the last Claude Code pick of other chats: it is on Claude Code only when picked in it
+const opts = (conv) => ({ ready: isReady(), agentId: AGENT_ID, rp: groupHere(conv), follow: !rpHere(conv) });
 
 hooks.ccStatusSeen = (st) => {
   if (!st || st.unavailable) return;
@@ -100,7 +104,7 @@ hooks.ccRoute = (conv) => routeToClaudeCode(conv, state.settings, opts(conv));
 /** A normal model was picked: a chat that picked Claude Code goes back to being a normal chat. */
 hooks.ccLeave = () => {
   const conv = state.current;
-  if (state.settings.ccPick) {
+  if (state.settings.ccPick && !rpHere(conv)) {
     state.settings.ccPick = null;
     saveSettings(state.settings);
   }
@@ -118,11 +122,14 @@ hooks.ccIsReady = () => isReady();
 
 function pick(m) {
   const conv = state.current;
-  state.settings.ccPick = m.ccValue;
-  saveSettings(state.settings);
+  const rp = rpHere(conv); // a roleplay picks for itself, not for the next new chats (decision 238)
+  if (!rp) {
+    state.settings.ccPick = m.ccValue;
+    saveSettings(state.settings);
+  }
   if (conv?.acp && conv.acp.agentId !== AGENT_ID) toast('This chat talks to a PC agent – new chats will use Claude Code');
   else if (conv?.acp) conv.acp.model = m.ccValue;
-  else if (conv?.messages.some((x) => !x.greeting)) conv.acp = { agentId: AGENT_ID, cc: true, model: m.ccValue };
+  else if (conv && (rp || conv.messages.some((x) => !x.greeting))) conv.acp = { agentId: AGENT_ID, cc: true, model: m.ccValue };
   if (conv?.acp && conv.messages.some((x) => !x.greeting)) persist(conv);
   hooks.updateModelUI?.();
   openSheet('#model-sheet', false);
@@ -132,7 +139,7 @@ function pick(m) {
 
 const favKey = (m) => CC_MODEL + m.ccValue;
 /** How many of Claude Code's models are favourites (the Favorites chip's count). */
-hooks.ccFavCount = () => (isReady() && !rpHere() ? entries().filter((m) => hooks.isFav?.(favKey(m))).length : 0);
+hooks.ccFavCount = () => (isReady() && !groupHere() ? entries().filter((m) => hooks.isFav?.(favKey(m))).length : 0);
 /**
  * Claude Code's models for the picker: notes (not signed in, its adapter missing) and one row per model, by name. The
  * picker puts the rows in A–Z among the other models (its "claude" badge and the Claude chip tell them apart); only
@@ -141,7 +148,7 @@ hooks.ccFavCount = () => (isReady() && !rpHere() ? entries().filter((m) => hooks
 hooks.ccModelRows = (q, current, { onlyFav = false } = {}) => {
   const notes = [];
   const rows = [];
-  if (rpHere()) return { notes, rows };
+  if (groupHere()) return { notes, rows };
   if (!isReady()) {
     // claude runs in the terminal, but the adapter Chronicle talks to it through is not there (a claude installed by
     // hand, or an install that stopped half way): said, instead of no Claude models and no reason
@@ -209,13 +216,13 @@ hooks.ccPickerOpened = () => {
 // a day old), Claude Code is started in the background and asked – the same hidden session as the usage
 function modelsOrUsage() {
   const stale = !modelCache?.models?.length || Date.now() - (modelCache.at || 0) > MODELS_FRESH;
-  if (isReady() && ready()?.auth !== 'no' && !rpHere() && stale) {
+  if (isReady() && ready()?.auth !== 'no' && !groupHere() && stale) {
     refreshUsage();
     hooks.renderModelList?.(); // "Loading the models of your plan…"
   } else refreshUsage({ background: true });
 }
 /** How many Claude Code models the picker shows (the "Claude" filter chip), 0 when it is not set up here. */
-hooks.ccModelCount = () => (isReady() && !rpHere() ? entries().length : 0);
+hooks.ccModelCount = () => (isReady() && !groupHere() ? entries().length : 0);
 
 // ---------- subscription usage ----------
 /** "/usage" in a session of the app's own (in no chat), closed afterwards. → the parsed usage or null. */

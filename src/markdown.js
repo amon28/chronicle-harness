@@ -145,12 +145,16 @@ export function renderMarkdown(text, opts = {}) {
   const html = isRichHtml(text) ? richHtml(text) : DOMPurify.sanitize(marked.parse(text || ''));
   const div = document.createElement('div');
   div.innerHTML = html;
-  div.querySelectorAll('pre').forEach((pre) => {
+  // the code box still being written is left uncoloured until its closing ``` arrives: colouring it again on every
+  // frame was a large part of a streaming redraw (decision 239)
+  const pres = div.querySelectorAll('pre');
+  const open = opts.streaming && ((text || '').match(/^\s*(```|~~~)/gm) || []).length % 2 === 1 ? pres[pres.length - 1] : null;
+  pres.forEach((pre) => {
     const code = pre.querySelector('code') || pre;
     const lang = ((code.className.match(/language-([\w+#-]+)/) || [])[1] || '').toLowerCase();
     const raw = code.textContent;
     let shown = lang;
-    if (opts.highlight !== false) {
+    if (opts.highlight !== false && pre !== open) {
       const detected = highlight(code, lang, !opts.streaming);
       if (!shown && detected) shown = LANG_LABEL[detected] || detected;
     }

@@ -16,10 +16,14 @@ const strToB64 = (s) => {
 // ---------- PNG chunks ----------
 function readPngText(bytes) {
   const out = {};
-  // Some cards carry the same key twice (Chub writes a second, stubbed "chara" whose first message is "..."):
-  // the fuller one is the card.
+  // Some cards carry the same key twice, and the one that counts is the first (as SillyTavern reads it). The second is
+  // a stub Chub writes (first message "...") or, in a forked card, the card it was forked from – longer, and wrong
+  // (a Mio card's text showing in its Botan and Mel forks). Every copy is kept in order in out.all (decision 240).
+  const all = {};
+  Object.defineProperty(out, 'all', { value: all });
   const put = (key, text) => {
-    if (!(key in out) || text.length > out[key].length) out[key] = text;
+    (all[key] ||= []).push(text);
+    if (!(key in out)) out[key] = text;
   };
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (dv.getUint32(0) !== 0x89504e47) return out;
@@ -144,14 +148,27 @@ export async function readCard(file) {
   const name = file.name.toLowerCase();
   if (bytes[0] === 0x89 && bytes[1] === 0x50) {
     const t = readPngText(bytes);
-    const raw = t.ccv3 || t.chara;
-    if (!raw) throw new Error('This PNG has no character card inside');
-    let json;
-    try {
-      json = JSON.parse(b64ToStr(raw));
-    } catch {
-      json = JSON.parse(raw);
-    }
+    const raws = [...(t.all.ccv3 || []), ...(t.all.chara || [])];
+    if (!raws.length) throw new Error('This PNG has no character card inside');
+    const parse = (raw) => {
+      try {
+        return JSON.parse(b64ToStr(raw));
+      } catch {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      }
+    };
+    // the first card that is a real one: a stub (no description, first message empty or "...") is passed over
+    const stub = (j) => {
+      const d = j?.data || j || {};
+      return !String(d.description || '').trim() && /^(\.{3}|…)?$/.test(String(d.first_mes || '').trim());
+    };
+    const cards = raws.map(parse).filter(Boolean);
+    if (!cards.length) throw new Error('The character card inside this PNG could not be read');
+    const json = cards.find((j) => !stub(j)) || cards[0];
     return { card: normalize(json), image: new Blob([bytes], { type: 'image/png' }) };
   }
   if (name.endsWith('.charx') || (bytes[0] === 0x50 && bytes[1] === 0x4b)) {

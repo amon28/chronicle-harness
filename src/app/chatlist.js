@@ -137,7 +137,7 @@ function consoleUsageUrl() {
 function openDrawer(open) {
   if (open) refreshUsage();
   if (open) hooks.ccDrawer?.(); // Claude Code's subscription usage, a line under the Go one (decision 165)
-  if (open && listDay !== new Date().toDateString()) renderConvList(); // "Today" became "Yesterday" while the app was open
+  if (open && (listStale || listDay !== new Date().toDateString())) renderConvList(); // stale, or "Today" became "Yesterday" while the app was open
   document.body.classList.toggle('drawer-open', open);
   $('#drawer').setAttribute('aria-hidden', String(!open));
 }
@@ -221,6 +221,15 @@ async function loadConvs() {
 
 let showArchived = false;
 let listDay = '';
+let listStale = false; // a save changed something the shut drawer didn't redraw
+const titled = new Map(); // the title each chat had when the list was last drawn
+// open on a phone, or always on a wide screen (tablet, unfolded phone) where the drawer sits beside the chat
+const listShown = () => document.body.classList.contains('drawer-open') || matchMedia('(min-width: 900px)').matches;
+/** Something the list shows changed (a spinner, a dot): redrawn now if you can see the list, else when it opens. */
+function convListChanged() {
+  if (listShown()) renderConvList();
+  else listStale = true;
+}
 function convItem(c, nested = false) {
   const item = el('div', 'conv-item' + (state.current?.id === c.id ? ' active' : '') + (c.archived ? ' archived' : '') + (nested ? ' in-folder' : ''));
   const title = el('button', 'conv-title');
@@ -373,6 +382,7 @@ function renderConvSearch(list) {
 }
 
 function renderConvList() {
+  listStale = false;
   const list = $('#conv-list');
   list.innerHTML = '';
   listDay = new Date().toDateString();
@@ -1006,11 +1016,16 @@ async function persist(conv = state.current) {
     const first = c.messages.find((m) => m.role === 'user');
     c.title = (first?.content || first?.files?.[0]?.name || 'Image').replace(/\s+/g, ' ').slice(0, 60);
   }
-  await conversations.put(JSON.parse(JSON.stringify(c)));
+  await conversations.put(c);
+  const before = state.convs.map((x) => x.id).join();
   if (!state.convs.some((x) => x.id === c.id)) state.convs.unshift(c);
   state.convs.sort((a, b) => b.updatedAt - a.updatedAt);
-  renderConvList();
+  // the list is rebuilt when you can see it, or when a chat moved or arrived; while the drawer is shut and the order is the
+  // same (a reply being saved every few seconds), it is only marked stale and rebuilt when the drawer opens (decision 239)
+  if (listShown() || before !== state.convs.map((x) => x.id).join() || c.title !== titled.get(c.id)) renderConvList();
+  else listStale = true;
+  titled.set(c.id, c.title);
   if (c === state.current) updateShortcuts();
 }
 
-export { anchorPopover, placeAbove, anySheetOpen, autoTitle, chatDeleted, loadConvs, markDeleted, newChat, openDrawer, openSheet, persist, refreshUsage, renderConvList, resetUsageAt, selectConv, setMode, usageAt };
+export { anchorPopover, placeAbove, anySheetOpen, autoTitle, chatDeleted, convListChanged, loadConvs, markDeleted, newChat, openDrawer, openSheet, persist, refreshUsage, renderConvList, resetUsageAt, selectConv, setMode, usageAt };

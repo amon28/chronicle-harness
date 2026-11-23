@@ -79,9 +79,13 @@ function tx(mode, fn, store = STORE) {
   );
 }
 
+// IndexedDB copies what it stores by itself, so a JSON copy first only doubles the work for a long chat; it is the
+// fallback for the rare value IndexedDB can't copy (a function, a DOM node), which JSON quietly drops (decision 239)
+const putPlain = (put, v) => put(v).catch((e) => (e?.name === 'DataCloneError' ? put(JSON.parse(JSON.stringify(v))) : Promise.reject(e)));
+
 export const conversations = {
   all: () => tx('readonly', (s) => s.getAll()).then((l) => (l || []).sort((a, b) => b.updatedAt - a.updatedAt)),
-  put: (c) => tx('readwrite', (s) => s.put(c)),
+  put: (c) => putPlain((v) => tx('readwrite', (s) => s.put(v)), c),
   remove: (id) => tx('readwrite', (s) => s.delete(id)),
   clear: () => tx('readwrite', (s) => s.clear()),
 };
@@ -250,7 +254,7 @@ export function saveSettings(s) {
             secureOk = false; // couldn't encrypt → keep the keys with the settings rather than lose them
           }
         }
-        await kvPut('settings', JSON.parse(JSON.stringify(toStore)));
+        await putPlain((v) => kvPut('settings', v), toStore);
       } catch (e) {
         onSaveError?.(e);
       }

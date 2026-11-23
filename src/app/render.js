@@ -799,13 +799,23 @@ function messageNode(msg, index, reuse = null) {
 }
 
 // ---------- tool cards ----------
-function toolSubject(c) {
+// a call's arguments, parsed once per change (the subject and the card both need them, every frame while streaming)
+const argsSeen = new WeakMap();
+function callArgs(c) {
+  const raw = c.arguments || '{}';
+  const got = argsSeen.get(c);
+  if (got?.raw === raw) return got.a;
   let a = {};
   try {
-    a = JSON.parse(c.arguments || '{}');
+    a = JSON.parse(raw);
   } catch {
     /* streaming / partial */
   }
+  argsSeen.set(c, { raw, a });
+  return a;
+}
+function toolSubject(c) {
+  const a = callArgs(c);
   if (c.name === 'web_search') return a.query || '';
   if (c.name === 'places' || c.name === 'phone_status' || c.name === 'phone_control' || c.name === 'take_photo' || c.name === 'notifications' || c.name === 'messages') return c.display?.path || a.category || a.name || a.action || a.what || '';
   if (c.name === 'save_tool') return 'tool_' + (a.name || '');
@@ -917,12 +927,7 @@ function toolCard(c) {
   det.append(sum);
   const body = el('div', 'tool-body');
   const d = c.display || {};
-  let args = {};
-  try {
-    args = JSON.parse(c.arguments || '{}');
-  } catch {
-    /* partial */
-  }
+  const args = callArgs(c);
   if (c.name === 'save_tool') {
     const code = el('div', 'md');
     code.innerHTML = renderMarkdown('```python\n' + (args.code ?? '') + '\n```', c.status === 'writing');
@@ -1559,6 +1564,12 @@ function openContextSheet() {
 // just "the last one at frame time": in group chats one speaker finishes and the next starts within the
 // same frame, and the finished reply must still get its final repaint.
 let rafPending = false;
+const PAINT_GAP = 100;
+const INPUT_QUIET = 150;
+let lastPaint = 0;
+let paintTimer = 0;
+let lastInput = -1e9;
+for (const ev of ['keydown', 'pointerdown', 'input']) addEventListener(ev, () => (lastInput = performance.now()), { capture: true, passive: true });
 const dirtyMsgs = new Set();
 // A finger (or its fling) on a box that scrolls by itself – the thinking box, code being written, tool output –
 // holds the repaints: replacing the node under the finger on every token killed the gesture, which is what made
@@ -1580,17 +1591,33 @@ function rerenderLast() {
   const msgs = state.current?.messages;
   const msg = msgs?.[msgs.length - 1];
   if (msg) dirtyMsgs.add(msg);
+  const done = msg && !msg.streaming;
+  // a reply that has just finished does not wait behind a slowed-down redraw already queued: it is drawn now
+  if (rafPending && done && paintTimer) {
+    clearTimeout(paintTimer);
+    paintTimer = 0;
+    rafPending = false;
+  }
   if (rafPending) return;
   rafPending = true;
-  if (innerBusy()) {
-    setTimeout(() => {
+  // a reply arriving is drawn at most ~10 times a second, and not right after a key or a tap: on a mid-range phone a
+  // redraw takes a good part of a frame, and one landing on a keystroke is what made typed letters show up late (239)
+  const now = performance.now();
+  // a message not on screen yet (a reply just started) and a reply that has just finished are drawn at once: the wait
+  // is only for the updates in between
+  const fresh = msg && (!msgNode(msgs.length - 1) || done);
+  const wait = innerBusy() ? 120 : fresh ? 0 : Math.max(PAINT_GAP - (now - lastPaint), now - lastPaint < 1000 ? INPUT_QUIET - (now - lastInput) : 0, 0); // typing non-stop still sees it once a second
+  if (wait > 0) {
+    paintTimer = setTimeout(() => {
+      paintTimer = 0;
       rafPending = false;
       rerenderLast();
-    }, 120);
+    }, wait);
     return;
   }
   requestAnimationFrame(() => {
     rafPending = false;
+    lastPaint = performance.now();
     const msgs = state.current?.messages || [];
     const todo = [...dirtyMsgs].map((m) => msgs.indexOf(m)).filter((i) => i >= 0).sort((a, b) => a - b);
     dirtyMsgs.clear();
@@ -1676,17 +1703,20 @@ function patchStreaming(old, node) {
   const nCol = nMd.parentElement;
   if (!oDone || old.className !== node.className || !oCol || oCol.children.length !== nCol.children.length || [...oCol.children].indexOf(oMd) !== [...nCol.children].indexOf(nMd) || old.children.length !== node.children.length) return fill();
   // the rest of the message (avatar, name, thinking, tool cards, notes): swap only what differs
+  // compared as they were built: the ones on screen had their emoji turned into icons, so their HTML never matched a
+  // fresh one and every tool card was replaced (and its icons redrawn) on every frame (decision 239)
+  const built = (x) => (x._src ??= x.outerHTML);
   const swap = (o, n, skip) => {
     const os = [...o.children];
     [...n.children].forEach((c, k) => {
       if (c === skip || os[k] === skip) return;
-      if (os[k].outerHTML !== c.outerHTML) os[k].replaceWith(c);
+      if (built(os[k]) !== built(c)) os[k].replaceWith(c);
     });
   };
   const oc = [...old.children];
   [...node.children].forEach((c, k) => {
     if (c === nCol) return;
-    if (oc[k].outerHTML !== c.outerHTML) oc[k].replaceWith(c);
+    if (built(oc[k]) !== built(c)) oc[k].replaceWith(c);
   });
   swap(oCol, nCol, nMd);
   // newly finished parts: added once, the ones already there are not touched

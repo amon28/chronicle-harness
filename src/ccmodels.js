@@ -106,10 +106,10 @@ export function effortStep(configOptions, want) {
  * roleplay or group chats (Claude Code gets the message text, not a character's prompt), and only while Claude Code
  * is set up (`ready`).
  */
-export function ccModelFor(conv, settings, { ready = false, agentId = 'acp_claude_phone', rp = false } = {}) {
+export function ccModelFor(conv, settings, { ready = false, agentId = 'acp_claude_phone', rp = false, follow = true } = {}) {
   if (!conv) return null;
   if (conv.acp) return conv.acp.agentId === agentId ? conv.acp.model || 'default' : null;
-  if (!ready || rp || !settings?.ccPick) return null;
+  if (!ready || rp || !follow || !settings?.ccPick) return null;
   const own = (conv.messages || []).some((m) => !m.greeting);
   return own ? null : settings.ccPick;
 }

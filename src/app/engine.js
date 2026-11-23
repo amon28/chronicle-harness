@@ -67,7 +67,7 @@ import { stripChoices } from '../choices.js';
 import { rememberChat, recallChat } from '../chatstate.js';
 import { fixMarks } from '../rpmarks.js';
 import { CORRECT_SYSTEM, POLISH_SYSTEM, buildCorrect, buildPolish, cleanRewrite } from '../rewrite.js';
-import { autoTitle, chatDeleted, loadConvs, openSheet, persist, refreshUsage, renderConvList, resetUsageAt, selectConv } from './chatlist.js';
+import { autoTitle, chatDeleted, convListChanged, loadConvs, openSheet, persist, refreshUsage, resetUsageAt, selectConv } from './chatlist.js';
 import { attaching, hideSlash, openModels, renderAttachments, updateSlash } from './composer.js';
 import { applyToolPicks } from '../toolset.js';
 import { $, cardFor, chatPersona, enabledToolsAll, convIsRp, copyText, currentModel, effortOptions, el, enabledTools, fmtUsage, groupMembers, hooks, isGroup, lorebookById, memoryOn, personaById, personas, pref, state, supportsImages, toast, toolsOn, uid, userName, userPersona } from './core.js';
@@ -473,6 +473,57 @@ function apiMessages(conv = state.current, { agent = false, wsCount = 0, persona
   return multi ? mergeSameRole(out) : out;
 }
 
+/**
+ * A one-on-one roleplay on Claude Code (decision 238). Claude Code keeps one long session, so the roleplay prompt is
+ * split the way this app's own prompt is:
+ * - rpSessionPrompt: what stays the same (main prompt, card, scenario, your persona, example dialogue), given when the
+ *   session starts. What changes as the story goes (world info, story memory, memories, recall, the scene sheet) is
+ *   left out, or every change would start a new session and send the whole chat again.
+ * - rpTurnContext: what this reply needs now (the world-info entries the last messages trigger, the author's note, the
+ *   preset's note, the card's depth prompt, post-history instructions), sent with each message.
+ */
+hooks.rpSessionPrompt = (conv) => {
+  const me = chatPersona(conv);
+  if (isGroup(conv) || !isRpConv(conv, me)) return '';
+  const keep = conv.ctxOff;
+  conv.ctxOff = [...new Set([...(keep || []), 'lore', 'story', 'memory', 'recall', 'tracker'])];
+  const summary = conv.summary;
+  delete conv.summary; // Claude Code has the chat itself
+  try {
+    const out = apiMessages(conv, { persona: me, mode: 'dry' });
+    const ctx = rpCtx(conv, me);
+    // the example dialogue ends where the chat starts (its marker, as the settings have it)
+    const marker = expandMacros(P('rp_chat_start'), ctx);
+    const end = out.findIndex((m, i) => i > 0 && m.role === 'system' && m.content === marker);
+    const head = out.slice(0, end >= 0 ? end + 1 : 1);
+    return head.map((m, i) => (i === 0 || m.role === 'system' ? String(m.content) : `${m.role === 'user' ? ctx.user : ctx.char}: ${m.content}`)).join('\n\n');
+  } finally {
+    if (keep === undefined) delete conv.ctxOff;
+    else conv.ctxOff = keep;
+    if (summary) conv.summary = summary;
+  }
+};
+hooks.rpTurnContext = (conv) => {
+  const me = chatPersona(conv);
+  if (isGroup(conv) || !isRpConv(conv, me)) return '';
+  const ctx = rpCtx(conv, me);
+  const X = (t) => expandMacros(t || '', ctx);
+  const RP = (k) => presetPref(state.settings, conv, k, pref);
+  const off = new Set(conv.ctxOff || []);
+  const card = me.cardMode ? cardFor(me, conv) : null;
+  const lore = off.has('lore') ? { before: '', after: '', depth: [] } : loreFor(conv, me);
+  const parts = [];
+  const world = [lore.before, lore.after, ...(lore.depth || []).map((d) => d.content)].filter((x) => x && x.trim()).map(X);
+  if (world.length) parts.push(`[World info for this moment]\n${world.join('\n')}`);
+  if (card?.depth_prompt?.prompt?.trim()) parts.push(X(card.depth_prompt.prompt));
+  if (conv.authorsNote?.text?.trim()) parts.push(X(`[Author's note: ${conv.authorsNote.text.trim()}]`));
+  if (RP('rpNote')?.trim()) parts.push(X(RP('rpNote').trim()));
+  const phi = card?.post_history_instructions?.trim() ? card.post_history_instructions.replace(/\{\{original\}\}/gi, RP('rpPhi') || '') : RP('rpPhi') || '';
+  if (phi.trim()) parts.push(X(phi));
+  return parts.join('\n\n');
+};
+hooks.rpCharName = (conv) => rpCtx(conv, chatPersona(conv)).char;
+
 /** System prompt block for a persona @mentioned into someone else's chat. */
 function guestBlock(me, host, rp) {
   return P('guest_block', { name: me.name, host: host.name, kind: rp ? 'roleplay' : 'conversation' });
@@ -522,12 +573,15 @@ function saveRunning() {
     if (c) persist(c).catch(() => {});
   }
 }
+// the periodic save waits for a moment when nothing is being drawn or typed (at most 2 s), so it doesn't land on a
+// keystroke (decision 239); going to the background still saves at once, below
+const saveWhenIdle = () => (typeof requestIdleCallback === 'function' ? requestIdleCallback(saveRunning, { timeout: 2000 }) : saveRunning());
 // going to the background is when Android kills apps: what is being written is saved at once
 document.addEventListener('visibilitychange', () => document.hidden && state.runs.size && saveRunning());
 function syncRuns() {
   const here = state.runs.has(state.current?.id);
   document.body.classList.toggle('streaming', here);
-  if (state.runs.size && !runSaver) runSaver = setInterval(saveRunning, RUN_SAVE_MS);
+  if (state.runs.size && !runSaver) runSaver = setInterval(saveWhenIdle, RUN_SAVE_MS);
   if (!state.runs.size && runSaver) {
     clearInterval(runSaver);
     runSaver = null;
@@ -568,7 +622,7 @@ function syncRuns() {
       if (document.hidden) notifyReplyDone();
     }, 1200);
   }
-  renderConvList(); // spinner beside the chats that are busy
+  convListChanged(); // spinner beside the chats that are busy (drawn when the list is open, decision 239)
   renderQueue();
   if (!state.runs.has(state.current?.id)) scheduleDrain();
 }
@@ -743,6 +797,9 @@ function logRequest(opts) {
   }
   return opts;
 }
+// a chat on Claude Code (or another agent on your PC) sends through its own session, not a request built here: it says
+// what it sent, and the inspector shows that – not the request this chat's preset model would have got (decision 241)
+hooks.noteAgentSent = (conv, rec) => lastRequests.set(conv.id, { ...rec, at: Date.now() });
 // ---------- sampler settings (per character, overridable per chat) ----------
 const SAMPLER_FIELDS = [
   ['temperature', 'Temperature', 0, 2, 0.05],
@@ -834,6 +891,7 @@ let inspTab = 'last';
 function inspectorRequest(tab) {
   const conv = state.current;
   if (tab === 'last') return lastRequests.get(conv.id) || null;
+  if (conv.acp && hooks.agentPreview) return hooks.agentPreview(conv);
   const persona = isGroup(conv) ? groupMembers(conv)[0] || chatPersona(conv) : chatPersona(conv);
   const model = modelFor(conv, persona);
   const agent = toolsOn(conv) && state.models.find((x) => x.id === model)?.capabilities?.tools?.supported !== false;
@@ -859,7 +917,7 @@ function renderInspector() {
   }
   const msgs = req.messages || [];
   const total = Math.round(msgs.reduce((n, m) => n + msgTokens(m), 0));
-  const name = state.models.find((x) => x.id === req.model)?.name || req.model;
+  const name = req.label || state.models.find((x) => x.id === req.model)?.name || req.model;
   const all = { ...req, ...(req.samplers || {}) };
   const params = ['temperature', 'max_tokens', 'top_p', 'top_k', 'min_p', 'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'reasoningEffort']
     .filter((k) => all[k] != null && all[k] !== '')
@@ -869,9 +927,9 @@ function renderInspector() {
     req.preview ? `Preview${req.persona ? ` for ${req.persona}` : ''}` : `Sent ${new Date(req.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`,
     name,
     `${msgs.length} messages · ~${total.toLocaleString()} tokens`,
-    req.tools?.length ? `${req.tools.length} tools: ${req.tools.map((t) => t.function?.name || t.name).join(', ')}` : 'no tools',
+    req.label ? '' : req.tools?.length ? `${req.tools.length} tools: ${req.tools.map((t) => t.function?.name || t.name).join(', ')}` : 'no tools',
     params.join(' · '),
-  ].filter(Boolean).join(' · ') + (!req.preview && req.cache ? `\n${req.cache}` : '');
+  ].filter(Boolean).join(' · ') + (!req.preview && req.cache ? `\n${req.cache}` : '') + (req.note ? `\n${req.note}` : '');
   msgs.forEach((m, i) => {
     const text = partText(m.content);
     const calls = m.tool_calls?.map((c) => `→ ${c.function?.name}(${c.function?.arguments || ''})`).join('\n') || '';
@@ -2672,7 +2730,7 @@ async function runQuietTask(conv, t) {
   if ((nothing && alone) || (i >= 0 && !after.length)) {
     conv.silenceUntil = Date.now() + 8000; // the "reply finished" notification is not sent for it
     conv.messages.splice(i);
-    if (state.unseen.delete(conv.id)) renderConvList(); // and no blue dot for it
+    if (state.unseen.delete(conv.id)) convListChanged(); // and no blue dot for it
     if (state.current === conv) renderMessages();
   }
   const result = !after.length ? 'did not run – the chat was busy; it runs at the next time' : nothing ? 'nothing new' : reply?.error ? `failed: ${reply.error}` : String(reply?.content || '').replace(/\s+/g, ' ').slice(0, 160) || 'no answer';

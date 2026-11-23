@@ -577,11 +577,14 @@ function favStar(key, name) {
 hooks.isFav = isFav;
 hooks.favStar = favStar;
 
+/** A Claude model from a provider (claude-…, anthropic/claude-…), not Claude Code. */
+const isClaudeModel = (m) => /(^|\/)claude[-.]/i.test(String(m?.apiModel || m?.id || '').split(':').pop());
 const MODEL_FILTERS = {
   all: ['All', () => true],
   fav: ['★ Favorites', (m) => isFav(m.id)],
-  // the user's own Claude Code in Linux (ccmodels-ui.js): its models are not in state.models
-  claude: ['Claude', () => false],
+  // every Claude: the user's own Claude Code in Linux (ccmodels-ui.js – its models are not in state.models) and Claude
+  // models from a provider (an Anthropic key, OpenRouter…), so the chip is there in a roleplay too (decision 237)
+  claude: ['Claude', (m) => isClaudeModel(m)],
   free: ['Free', isFree],
   new: ['New', isNew],
   vision: ['Vision', (m) => supportsImages(m)],
@@ -593,7 +596,7 @@ function renderModelFilters() {
   bar.innerHTML = '';
   for (const [key, [label, fn]] of Object.entries(MODEL_FILTERS)) {
     // Claude Code's models count under Claude, and under Reasoning and Vision (they all think and see pictures)
-    const n = key === 'claude' ? hooks.ccModelCount?.() || 0 : key === 'fav' ? state.models.filter(fn).length + (hooks.ccFavCount?.() || 0) : state.models.filter(fn).length + (CC_TOO.has(key) ? hooks.ccModelCount?.() || 0 : 0);
+    const n = key === 'claude' ? (hooks.ccModelCount?.() || 0) + state.models.filter(fn).length : key === 'fav' ? state.models.filter(fn).length + (hooks.ccFavCount?.() || 0) : state.models.filter(fn).length + (CC_TOO.has(key) ? hooks.ccModelCount?.() || 0 : 0);
     if (key !== 'all' && key !== 'fav' && !n) continue; // Favorites is always there: it says how to add one
     const b = el('button', 'filter-chip' + (modelFilter === key ? ' active' : '') + (key === 'fav' ? ' fav' : ''), key === 'all' || (key === 'fav' && !n) ? label : `${label} ${n}`);
     b.onclick = () => {
@@ -608,13 +611,22 @@ function renderModelList() {
   const q = $('#model-search').value.trim().toLowerCase();
   const list = $('#model-list');
   list.innerHTML = '';
-  if (!MODEL_FILTERS[modelFilter] || (modelFilter === 'claude' ? !hooks.ccModelCount?.() : modelFilter !== 'all' && modelFilter !== 'fav' && !state.models.some(MODEL_FILTERS[modelFilter][1]) && !(CC_TOO.has(modelFilter) && hooks.ccModelCount?.()))) modelFilter = 'all';
+  if (!MODEL_FILTERS[modelFilter] || (modelFilter === 'claude' ? !hooks.ccModelCount?.() && !state.models.some(isClaudeModel) : modelFilter !== 'all' && modelFilter !== 'fav' && !state.models.some(MODEL_FILTERS[modelFilter][1]) && !(CC_TOO.has(modelFilter) && hooks.ccModelCount?.()))) modelFilter = 'all';
   renderModelFilters();
   // the Claude chip: the user's own Claude Code in Linux alone, under its heading (ccmodels-ui.js)
   if (modelFilter === 'claude') {
     hooks.renderCcModels?.(list, q, shownModel());
-    if (!list.childElementCount) list.append(el('p', 'hint pad', 'No matches.'));
-    return;
+    // …then the Claude models from a provider, under their own heading when Claude Code is listed above them
+    const api = state.models.filter((m) => isClaudeModel(m) && (!q || m.name.toLowerCase().includes(q) || m.id.includes(q)));
+    if (!api.length) {
+      if (!list.childElementCount) list.append(el('p', 'hint pad', 'No matches.'));
+      return;
+    }
+    if (list.childElementCount) {
+      const head = el('div', 'cc-models-head');
+      head.append(el('span', 'cc-models-title', 'Claude from your providers'));
+      list.append(head);
+    }
   }
   // elsewhere its models are in the same A–Z as the others (their "claude" badge tells them apart); under Favorites
   // only the starred ones
