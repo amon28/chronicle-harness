@@ -268,13 +268,14 @@ describe("the agent's report: jobs, depth, line numbers, append, and what a kill
     expect(existsSync(join(dir, 'one.log'))).toBe(false);
   });
   it('a kill that would hit two processes is stopped with their pids – the Notepad lesson', async () => {
-    const { copyFileSync, chmodSync } = await import('node:fs');
+    const { symlinkSync } = await import('node:fs');
     const bin = join(dir, 'pcfzzz');
-    copyFileSync('/bin/sleep', bin);
-    chmodSync(bin, 0o755);
-    // started as "sleep": on newer Ubuntu (the GitHub runner) sleep is one multi-call program that picks what to do by
-    // the name it is started as, and as "pcfzzz" it quits at once. The process is still called pcfzzz (its file name).
-    const ps = [spawn(bin, ['300'], { argv0: 'sleep' }), spawn(bin, ['300'], { argv0: 'sleep' })];
+    // Node itself under another name: a link to it is run as "pcfzzz" (the process list names it so). A copy of the
+    // system's sleep was used before, but on newer Ubuntu (the GitHub runner) that is a multi-call program that quit at
+    // once under another name, however it was started.
+    symlinkSync(process.execPath, bin);
+    const wait = ['-e', 'setTimeout(() => {}, 300000)'];
+    const ps = [spawn(bin, wait), spawn(bin, wait)];
     procs.push(...ps);
     await new Promise((r) => setTimeout(r, 300));
     expect(ps.map((p) => p.exitCode)).toEqual([null, null]); // both really running before the kill is tried
