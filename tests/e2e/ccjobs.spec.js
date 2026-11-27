@@ -67,7 +67,9 @@ test('Claude Code in the background-job lists, and /polish on it runs a session 
 // minutes; 1.5 s here), so the next one still runs.
 test('a Claude Code background job that never answers does not hold up the next one', async ({ app }) => {
   await app.addInitScript(() => (globalThis.__ocmCcTextLimitMs = 1500));
-  await app.addInitScript(standIn, PORT + 1);
+  // a port of its own: PORT + 1 was ccretry's, and this test's bridge (its agent never answers) kept it for the rest
+  // of the run – ccretry, in the other worker, then sat on "starting Claude Code…"
+  await app.addInitScript(standIn, 41775);
   await app.reload();
   await app.waitForSelector('body[data-ready="1"]');
   await app.click('#model-btn');
