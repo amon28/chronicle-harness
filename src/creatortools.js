@@ -1,6 +1,7 @@
 import { TOOL_GROUPS } from './toolset.js';
 import { planPersonaEdit, planLoreEdit, CARD_FIELDS, PERSONA_FIELDS } from './editpersona.js';
 import { newEntry } from './lore.js';
+import { PRESET_FIELD_HELP, STARTERS, planPresetChange, presetView, presets as presetList, findPreset } from './rppresets.js';
 // Tools that let the assistant make things for you: a chat persona, a lorebook, or a full roleplay character (card with
 // its own lorebook). Every one asks you first and nothing is added without a yes.
 const fn = (name, description, properties, required = []) => ({
@@ -37,6 +38,20 @@ const toolsNote = (a) =>
 
 const EDIT_LIST = { type: 'array', items: { type: 'object', properties: { field: { type: 'string' }, old_text: { type: 'string' }, new_text: { type: 'string' }, replace_all: { type: 'boolean' } }, required: ['old_text', 'new_text'] } };
 export const creatorDefs = () => [
+  fn(
+    'roleplay_presets',
+    `See, make, change and delete the user's roleplay presets (Settings › Roleplay presets): named sets of the roleplay model, its reasoning effort, the samplers and the roleplay prompts. "Standard" is the Roleplay page's own settings (read it with preset "Standard"; it is changed there, not here). A preset holds only what it changes – the rest follows Standard. Call list, then read, before a change. create, edit and delete ask the user first. Fields: ${Object.entries(PRESET_FIELD_HELP).map(([k, v]) => `${k} (${v})`).join('; ')}. Prompts can use {{char}} and {{user}}. Ready-made starting points for create's "from": ${STARTERS.map((x) => x.name).join(', ')}.`,
+    {
+      action: { type: 'string', enum: ['list', 'read', 'create', 'edit', 'delete'] },
+      preset: { type: 'string', description: 'read / edit / delete: its name or id (from list); "Standard" to read the base settings' },
+      name: { type: 'string', description: 'create: the new preset’s name' },
+      from: { type: 'string', description: 'create: start as a copy of this preset, a starter, or "Standard" (the default)' },
+      set: { type: 'object', description: 'create / edit: whole fields to set, e.g. {"rpPhi": "…", "samplers": {"temperature": 0.9, "max_tokens": 600}, "name": "New name"}; "" clears a field (it follows Standard again)' },
+      edits: { ...EDIT_LIST, description: 'create / edit: exact text replacements inside a prompt field [{field, old_text, new_text}] (field: rpMain, rpPhi, rpNote, rpPrefill or rpImpersonate; default rpPhi)' },
+      make_default: { type: 'boolean', description: 'create / edit: true makes it the preset every roleplay uses unless a chat picks another; false (edit) stops it being the default' },
+    },
+    ['action'],
+  ),
   fn(
     'edit_persona',
     `Change part of an existing chat persona or roleplay character – the rest stays exactly as it is. Use this (not save_persona / save_character) to adjust something: a detail in the description, the tone of the prompt, one more greeting, the tools. Call read_persona first to see the current text. "edits" are exact text replacements inside one field (old_text must match exactly, like edit_file); "set" replaces whole fields. Fields – chat persona: ${PERSONA_FIELDS.join(', ')}; character: ${CARD_FIELDS.join(', ')}. The user approves the change first.`,
@@ -141,7 +156,36 @@ async function approve(ctx, summary, yes = 'Add it') {
 }
 const declined = (answer) => ({ ok: false, result: `The user said no (${answer}). Ask what to change, then try again.`, display: { error: 'declined' } });
 
+/** roleplay_presets (decision 261): ctx.presets = { settings(), standard(), save(list, defaultId), models() }. */
+async function runPresetTool(args, ctx) {
+  const host = ctx.presets;
+  if (!host) return { ok: false, result: 'Roleplay presets are not available here.', display: { error: 'unavailable' } };
+  const s = host.settings();
+  const action = String(args.action || '');
+  if (action === 'list') {
+    const l = presetList(s);
+    const def = s.rpPresetId || '';
+    const lines = [`standard · Standard (the Roleplay page's own settings)${def ? '' : ' · default'}`, ...l.map((p) => `${p.id} · ${p.name}${p.id === def ? ' · default' : ''}${p.model ? ` · model ${p.model}` : ''}`)];
+    return { ok: true, result: lines.join('\n'), display: { path: String(l.length) } };
+  }
+  if (action === 'read') {
+    if (/^(standard)?$/i.test(String(args.preset || '').trim())) return { ok: true, result: JSON.stringify(presetView({ name: 'Standard', ...host.standard() }), null, 1).slice(0, 24000), display: { path: 'Standard' } };
+    const p = findPreset(presetList(s), args.preset);
+    if (!p) throw new Error(`No preset “${args.preset}” – call list first`);
+    if (p.ambiguous) throw new Error(`More than one preset matches: ${p.ambiguous.join(', ')} – give its id`);
+    return { ok: true, result: JSON.stringify(presetView(p, host.standard()), null, 1).slice(0, 24000), display: { path: p.name } };
+  }
+  const plan = planPresetChange(s, action, args, { standard: host.standard() });
+  const yes = action === 'delete' ? 'Delete it' : action === 'create' ? 'Make it' : 'Change it';
+  const no = await approve(ctx, plan.summary, yes);
+  if (no) return declined(no);
+  host.save(plan.list, plan.defaultId);
+  const model = action !== 'delete' && args.set?.model && host.models && !host.models().some((m) => m.id === args.set.model) ? ` Note: the model “${args.set.model}” is not in the user's model list now, so chats keep their own model.` : '';
+  return { ok: true, result: plan.result + model, display: { path: args.name || args.preset || '' } };
+}
+
 export async function runCreatorTool(name, args, ctx) {
+  if (name === 'roleplay_presets') return runPresetTool(args, ctx);
   if (!ctx.creator) return { ok: false, result: 'Creating things is not available here.', display: { error: 'unavailable' } };
   if (name === 'list_personas') {
     const l = ctx.creator.list();

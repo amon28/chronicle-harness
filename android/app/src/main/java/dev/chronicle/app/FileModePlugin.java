@@ -95,32 +95,63 @@ public class FileModePlugin extends Plugin {
         String root = resolve(call.getString("path", ""));
         JSObject files = new JSObject();
         JSArray links = new JSArray();
-        if (root != null) walkModes(new File(root), "", files, links, new int[] { 0 });
+        // stat: also each file's size and time, the folders left out and whether the walk stopped early – the whole
+        // listing in this one call, instead of a call per folder from the app (decision 259)
+        boolean stat = Boolean.TRUE.equals(call.getBoolean("stat", false));
+        JSObject info = stat ? new JSObject() : null;
+        JSArray excluded = stat ? new JSArray() : null;
+        String[] incomplete = { "" };
+        if (root != null) walkModes(new File(root), "", files, links, new int[] { 0 }, info, excluded, incomplete);
         JSObject r = new JSObject();
         r.put("files", files);
         // symbolic links: the app's scan must not follow them (a link to ../.. would walk the app's own folders)
         r.put("links", links);
+        if (stat) {
+            r.put("info", info);
+            r.put("excluded", excluded);
+            r.put("incomplete", incomplete[0]);
+            r.put("exists", root != null && new File(root).isDirectory());
+        }
         call.resolve(r);
     }
 
     /** What the app never mirrors (the JS scan skips them too): a package install or a clone, thousands of files. */
+    // the same list as SHELL_ONLY in src/shellfs.js: caches and installs, thousands of files nobody reads through the app
+    private static final java.util.Set<String> SHELL_ONLY = new java.util.HashSet<>(java.util.Arrays.asList(
+        "node_modules", ".git", ".venv", "venv", "__pycache__", ".next", ".cache", ".gradle", ".tox", ".mypy_cache", ".pytest_cache", "target"));
     private static boolean shellOnly(String name) {
-        return "node_modules".equals(name) || ".git".equals(name);
+        return SHELL_ONLY.contains(name);
     }
 
-    private void walkModes(File dir, String prefix, JSObject out, JSArray links, int[] seen) {
+    private void walkModes(File dir, String prefix, JSObject out, JSArray links, int[] seen, JSObject info, JSArray excluded, String[] incomplete) {
         File[] kids = dir.listFiles();
-        if (kids == null) return;
+        if (kids == null) {
+            if (info != null && !prefix.isEmpty() && incomplete[0].isEmpty()) incomplete[0] = "could not read " + prefix;
+            return;
+        }
         for (File k : kids) {
-            if (++seen[0] > 20000) return;
+            if (++seen[0] > 20000) {
+                if (incomplete[0].isEmpty()) incomplete[0] = "more than 20,000 files (the scan stopped in " + (prefix.isEmpty() ? "the top directory" : prefix) + ")";
+                return;
+            }
             String rel = prefix.isEmpty() ? k.getName() : prefix + "/" + k.getName();
             try {
                 StructStat st = Os.lstat(k.getPath());
                 if (android.system.OsConstants.S_ISLNK(st.st_mode)) links.put(rel);
                 else if (android.system.OsConstants.S_ISDIR(st.st_mode)) {
-                    if (!shellOnly(k.getName())) walkModes(k, rel, out, links, seen);
+                    if (!shellOnly(k.getName())) walkModes(k, rel, out, links, seen, info, excluded, incomplete);
+                    else if (excluded != null) excluded.put(rel);
                 }
-                else if (android.system.OsConstants.S_ISREG(st.st_mode)) out.put(rel, (int) (st.st_mode & 07777));
+                else if (android.system.OsConstants.S_ISREG(st.st_mode)) {
+                    out.put(rel, (int) (st.st_mode & 07777));
+                    // the same size and time the app's own folder listing reports (File.length / lastModified)
+                    if (info != null) {
+                        JSArray a = new JSArray();
+                        a.put(k.length());
+                        a.put(k.lastModified());
+                        info.put(rel, a);
+                    }
+                }
             } catch (Exception ignored) {
             }
         }

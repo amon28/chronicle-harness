@@ -28,7 +28,7 @@ test('export everything, then bring it all back with Replace; the Linux home goe
   await send(app, 'hello move');
   const id = await app.evaluate(async () => {
     const db = await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => res(r.result); });
-    const convs = await new Promise((res) => { const q = db.transaction('conversations').objectStore('conversations').getAll(); q.onsuccess = () => res(q.result); });
+    const convs = await new Promise((res) => { const q = globalThis.__ocmChatsReq(); q.onsuccess = () => res(q.result); });
     await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put({ objects: { abc: new Uint8Array([7, 8]) }, head: 'abc' }, 'git:' + convs[0].id); t.oncomplete = res; });
     localStorage.setItem('ocm.usageLog', '[{"t":42}]');
     return convs[0].id;
@@ -70,7 +70,7 @@ test('export everything, then bring it all back with Replace; the Linux home goe
   const back = await app.evaluate(async (id) => {
     const db = await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => res(r.result); });
     const git = await new Promise((res) => { const q = db.transaction('kv').objectStore('kv').get('git:' + id); q.onsuccess = () => res(q.result); });
-    const convs = await new Promise((res) => { const q = db.transaction('conversations').objectStore('conversations').getAll(); q.onsuccess = () => res(q.result); });
+    const convs = await new Promise((res) => { const q = globalThis.__ocmChatsReq(); q.onsuccess = () => res(q.result); });
     return { head: git?.head, bytes: git ? [...git.objects.abc] : null, chats: convs.length, usage: localStorage.getItem('ocm.usageLog') };
   }, id);
   expect(back).toEqual({ head: 'abc', bytes: [7, 8], chats: 1, usage: '[{"t":42}]' });

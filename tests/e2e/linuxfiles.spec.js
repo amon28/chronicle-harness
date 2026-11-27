@@ -100,7 +100,7 @@ test('Files › Linux files: browse /root read-only, open, copy into the chat; t
 
 test('Files: grid or list (remembered), long press selects, path bar goes up', async ({ app }) => {
   await app.evaluate(async () => {
-    const put = (store, v) => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const t = r.result.transaction(store, 'readwrite'); t.objectStore(store).put(v); t.oncomplete = res; }; });
+    const put = (store, v) => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const t = r.result.transaction(store, 'readwrite'); t.objectStore(store).put(v); t.oncomplete = res; }; });
     const enc = (s) => new TextEncoder().encode(s);
     await put('conversations', { id: 'gc1', title: 'Grid chat', createdAt: 1, updatedAt: 5, personaId: 'general', messages: [{ role: 'user', content: 'hi', at: 1 }] });
     await put('workspaces', { id: 'gc1', files: { 'docs/a.md': { data: enc('a'), mtime: Date.now() }, 'b.txt': { data: enc('bb'), mtime: Date.now() } } });
@@ -157,7 +157,7 @@ test.describe('at the largest text size', () => {
     await app.click('#preview-sheet [data-close]');
     // a chat's files: select one – Download, Share and Delete are the same height
     await app.evaluate(async () => {
-      const put = (store, v) => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const t = r.result.transaction(store, 'readwrite'); t.objectStore(store).put(v); t.oncomplete = res; }; });
+      const put = (store, v) => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const t = r.result.transaction(store, 'readwrite'); t.objectStore(store).put(v); t.oncomplete = res; }; });
       await put('conversations', { id: 'xl1', title: 'XL chat', createdAt: 1, updatedAt: 5, personaId: 'general', messages: [{ role: 'user', content: 'hi', at: 1 }] });
       await put('workspaces', { id: 'xl1', files: { 'b.txt': { data: new TextEncoder().encode('bb'), mtime: Date.now() } } });
     });

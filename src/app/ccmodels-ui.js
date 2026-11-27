@@ -33,7 +33,8 @@ const opts = (conv) => ({ ready: isReady(), agentId: AGENT_ID, rp: groupHere(con
 
 hooks.ccStatusSeen = (st) => {
   if (!st || st.unavailable) return;
-  cache('ccReady', { installed: !!st.installed, auth: st.auth || 'unknown', at: Date.now() });
+  cache('ccReady', { installed: !!st.installed, auth: st.auth || 'unknown', claude: st.claude || '', at: Date.now() });
+  if (st.installed) hooks.ccCheckUpdate?.(st.claude); // is a newer Claude Code out? (decision 248)
 };
 /**
  * Is the claude_code tool offered in this chat (decision 167)? Only from the cached status (installed and signed in –
@@ -112,7 +113,7 @@ hooks.ccLeave = () => {
   if (!conv?.acp?.cc) return;
   // the ACP session is let go: closed in Claude Code (its transcript stays in Claude Code's own history); picking
   // Claude Code again starts a new session that gets this chat so far as context
-  hooks.acpCloseSession?.(AGENT_ID, conv.acp.sessionId);
+  hooks.acpCloseSession?.(AGENT_ID, conv.acp.sessionId, conv);
   delete conv.acp;
   if (conv.messages.some((m) => !m.greeting)) persist(conv);
 };

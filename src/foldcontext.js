@@ -70,7 +70,20 @@ const okOf = (c) => c.status === 'done' || (c.status == null && !/^(Error|Failed
 const wrote = (c) => okOf(c) || /^Wrote\b|saved as (written|patched)/.test(String(c.result || ''));
 
 /** The paths a call changed: [{ path, op }] (op create / change / delete). */
-function fileChanges(c) {
+// worked out once per call (and again only when it changed): the whole chat is gone over for every request and on every
+// chat opened (decision 258)
+const perCall = (fn) => {
+  const memo = new WeakMap();
+  return (c) => {
+    const h = memo.get(c);
+    if (h && h.a === c.arguments && h.r === c.result && h.s === c.status && h.d === c.display) return h.v;
+    const v = fn(c);
+    memo.set(c, { a: c.arguments, r: c.result, s: c.status, d: c.display, v });
+    return v;
+  };
+};
+const fileChanges = perCall(fileChangesOf);
+function fileChangesOf(c) {
   if (!wrote(c)) return [];
   const a = parse(c.arguments);
   const res = String(c.result || '');
@@ -223,7 +236,7 @@ export const stubRead = (path) => `[Result left out: ${path} was changed later i
 export const pruneCut = (n) => Math.floor(Math.max(0, n - PRUNE_RECENT) / PRUNE_EVERY) * PRUNE_EVERY;
 
 const canon = (v) => (Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}` : JSON.stringify(v));
-const sigOf = (c) => {
+const sigOf = perCall((c) => {
   let a;
   try {
     a = JSON.parse(c.arguments || '{}');
@@ -231,7 +244,7 @@ const sigOf = (c) => {
     return `${c.name}\u0000${c.arguments || ''}`;
   }
   return `${c.name}\u0000${canon(a)}`;
-};
+});
 
 // ---------- superseded browser snapshots ----------
 const SNAP_AT = /(^|\n)Page: [^\n]*\nURL: [^\n]*\nScroll: /;

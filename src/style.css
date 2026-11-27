@@ -943,8 +943,9 @@ button.go-usage-link { font-size: 0.75rem; }
 .cm-tag { font-size: 0.625rem; color: var(--text-3); white-space: nowrap; }
 .cm-edit { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .cm-add { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-.perf-report { position: fixed; left: 10px; right: 10px; top: calc(60px + var(--st)); z-index: 300; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.45); max-height: 60vh; overflow: auto; }
-.perf-report pre { margin: 0 0 8px; font: 0.75rem/1.45 var(--mono); white-space: pre-wrap; }
+.perf-item > summary { list-style: none; cursor: pointer; }
+.perf-item > summary::-webkit-details-marker { display: none; }
+.perf-text { margin: 8px 0; font: 0.75rem/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow: auto; }
 
 /* workspace file manager */
 .wsm-tools { margin: 8px 0 8px; flex-wrap: wrap; }

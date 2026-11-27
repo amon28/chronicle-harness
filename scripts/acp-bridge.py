@@ -23,7 +23,7 @@ Chronicle's own Linux uses it too (Settings › Agent › Claude Code in Linux):
 written to --port-file) and --secret-stdin (the secret comes on stdin, so it is in no command line, log or file).
 A secret you give (--secret, --secret-stdin, ACP_BRIDGE_SECRET) is never printed; only one it makes up is.
 """
-import json, os, secrets, socket, subprocess, sys, threading, time
+import io, json, os, secrets, socket, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 args = sys.argv[1:]
@@ -59,7 +59,9 @@ child = subprocess.Popen(args if len(args) > 1 else ["/bin/sh", "-c", args[0]], 
 cond = threading.Condition()
 log = []  # the agent's messages; log[i] has number first + i
 first = [0]
+acked = [0]  # the furthest cursor any client has read: events before it are never asked for again
 wlock = threading.Lock()
+RUN = secrets.token_hex(6)  # this run of the bridge: a client that sees another run knows the bridge restarted
 
 
 def add(msg):
@@ -72,7 +74,10 @@ def add(msg):
 
 
 def reader():
-    for line in iter(child.stdout.readline, b""):
+    # buffered: the pipe is unbuffered (bufsize=0, for stdin), and a raw readline reads one byte per system call –
+    # hundreds per streamed chunk, each one trapped by proot on the phone
+    out = io.BufferedReader(child.stdout, 1 << 16)
+    for line in iter(out.readline, b""):
         line = line.strip()
         if not line:
             continue
@@ -241,7 +246,10 @@ class H(BaseHTTPRequestHandler):
         if not self.authed():
             return
         if self.path.startswith("/health"):
-            return self.reply(200, {"running": child.poll() is None, "mcpToken": mcp_token})
+            with cond:
+                now = first[0] + len(log)
+            # next: where a new client starts reading – what is already in the log is another client's past
+            return self.reply(200, {"running": child.poll() is None, "mcpToken": mcp_token, "run": RUN, "next": now})
         if not self.path.startswith("/events"):
             return self.reply(404, {})
         try:
@@ -249,8 +257,20 @@ class H(BaseHTTPRequestHandler):
         except ValueError:
             since = 0
         with cond:
+            if since < first[0] or since > first[0] + len(log):
+                # a reader this far behind the buffer would silently miss what was trimmed, and one ahead of it is
+                # reading another run of the bridge: said, not skipped or waited on
+                return self.reply(200, {"reset": True, "next": first[0] + len(log), "run": RUN})
             if first[0] + len(log) <= since:
                 cond.wait(25)
+            # the trim runs before start is computed: next is built from the trimmed first, so a read is never
+            # answered with a cursor past events the reader was never given
+            acked[0] = max(acked[0], since)
+            if len(log) > 2000 and acked[0] > first[0]:
+                # keep a small tail: everything older than what was read is dropped, not kept until the 20000 cap
+                drop = min(len(log) - 1000, acked[0] - first[0])
+                del log[:drop]
+                first[0] += drop
             start = max(0, since - first[0])
             out = log[start:]
         # at most about 1 MB per answer (at least one event): the app reads the rest with the next poll
@@ -261,7 +281,7 @@ class H(BaseHTTPRequestHandler):
             if size > 1000000:
                 break
         out = out[:n]
-        self.reply(200, {"next": first[0] + start + n, "events": out})
+        self.reply(200, {"next": first[0] + start + n, "events": out, "run": RUN})
 
     def do_POST(self):
         chat = self.mcp_chat()

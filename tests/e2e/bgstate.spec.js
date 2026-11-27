@@ -107,3 +107,48 @@ test.describe('a reply the app did not live to finish', () => {
     await expect(last.locator('.msg-cut')).toHaveCount(0);
   });
 });
+
+// Decision 258: after the first save of a run, only the reply being written is saved (on its own); the next start puts it
+// back into its chat – the whole chat is not written again every few seconds
+test.describe('saving a reply while it is written', () => {
+  test.use({ appSettings: { prefs: { tools: true } } });
+  test('later saves write only the reply, and a kill after them still keeps what it had', async ({ app }) => {
+    await app.addInitScript(() => Object.defineProperty(document, 'hidden', { get: () => !!globalThis.__away, configurable: true }));
+    await app.reload();
+    await app.waitForSelector('body[data-ready="1"]');
+    const away = () =>
+      app.evaluate(() => {
+        globalThis.__away = true;
+        document.dispatchEvent(new Event('visibilitychange'));
+        globalThis.__away = false;
+      });
+    const stored = () =>
+      app.evaluate(() => new Promise((res) => {
+        const q = indexedDB.open('chronicle');
+        q.onsuccess = () => {
+          const r = globalThis.__ocmChatsReq();
+          r.onsuccess = () => res(JSON.stringify(r.result));
+        };
+      }));
+    await app.fill('#input', 'STEPSTHENSLOW please');
+    await app.click('#send-btn');
+    const last = app.locator('.msg.assistant').last();
+    await expect(last).toContainText('Answer paragraph 3', { timeout: 20000 });
+    await away(); // the first save of the run: the whole chat
+    await app.waitForTimeout(300);
+    const first = await stored();
+    expect(first).toContain('Answer paragraph 3');
+    await expect(last).toContainText('Answer paragraph 12', { timeout: 20000 });
+    expect(await app.evaluate(() => document.body.classList.contains('streaming'))).toBe(true); // still writing
+    await away(); // a later one: the reply only
+    await app.waitForTimeout(300);
+    expect(await stored()).not.toContain('Answer paragraph 12'); // the chat's own record was not written again
+    await app.reload(); // killed: the next start puts the reply back
+    await app.waitForSelector('body[data-ready="1"]');
+    await app.click('#menu-btn');
+    await app.locator('#conv-list .conv-item').first().click();
+    await expect(last).toContainText('Answer paragraph 12');
+    await expect(last.locator('.msg-cut')).toContainText('before this reply was finished');
+    await expect(app.locator('.msg.user')).toHaveCount(1);
+  });
+});

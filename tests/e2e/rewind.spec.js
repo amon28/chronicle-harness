@@ -8,8 +8,9 @@ const wsFiles = (app) =>
       new Promise((resolve) => {
         const q = indexedDB.open('chronicle');
         q.onsuccess = () => {
-          const g = q.result.transaction('workspaces').objectStore('workspaces').getAll();
-          g.onsuccess = () => resolve(Object.keys(g.result[0]?.files || {}).sort());
+          // a chat's files are records of their own, keyed [chat, path] (decision 259)
+          const g = q.result.transaction('wsfiles').objectStore('wsfiles').getAllKeys();
+          g.onsuccess = () => resolve(g.result.map((k) => k[1]).sort());
         };
       }),
   );

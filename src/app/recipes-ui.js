@@ -46,6 +46,7 @@ const lookupIn = (conv) => (n) => recipesFor(conv).find((x) => x.name === n && x
 
 /** Run a recipe in a chat: each step as a message, sent when the reply before has finished. Stops on an error or Stop. */
 export async function runRecipe(conv, name, argText = '', args = null) {
+  await hooks.loadMessages?.(conv); // a chat whose messages are not loaded yet (decision 260)
   const r = lookupIn(conv)(name);
   if (!r) throw new Error(`No recipe "${name}"`);
   if (state.runs.has(conv.id)) throw new Error('Wait for the reply to finish, then run the recipe');

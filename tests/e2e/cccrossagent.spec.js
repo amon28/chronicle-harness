@@ -153,6 +153,27 @@ test("Claude Code calls Chronicle's models: list_models and ask_model with the m
   await expect(reply).toContainText('No job job_nope00 in this chat', { timeout: 20000 });
 });
 
+test('Claude Code saves a roleplay character in the app, after the user approves it (decision 250)', async ({ app }) => {
+  await fakeLinux(app);
+  const reply = app.locator('.msg.assistant').last();
+  await app.click('#model-btn');
+  await expect(app.locator('#model-list .cc-model')).toHaveCount(2, { timeout: 20000 });
+  await app.click('#model-list .cc-model:has-text("Default – Opus 4.8")');
+  const card = { spec: 'chara_card_v2', spec_version: '2.0', data: { name: 'Nicole Demara', description: 'Front desk and door at the Starlight Hutch.', personality: 'sharp, counts every coin', scenario: 'A space station club.', first_mes: '*She looks up from the ledger.* Name?', character_book: { entries: [{ keys: ['Cunning Hares'], content: 'Nicole works to pay off the Cunning Hares\' debts.' }] } } };
+  await app.fill('#input', `mcp save_character ${JSON.stringify({ card })}`);
+  await app.click('#send-btn');
+  // the same approval as for any model: nothing is saved until the user says so
+  await expect(app.locator('#ask-sheet')).toContainText('Add the character “Nicole Demara”?', { timeout: 20000 });
+  await expect(app.locator('#ask-sheet')).toContainText('lorebook with 1 entries');
+  await app.click('#ask-options .menu-item:has-text("Add it")');
+  await expect(reply).toContainText('save_character -> Added Nicole Demara with a 1-entry lorebook', { timeout: 20000 });
+  await app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 20000 });
+  // it is in the app now: Claude Code reads it back
+  await send(app, 'mcp read_persona {"persona":"Nicole Demara"}');
+  await expect(reply).toContainText('read_persona -> ', { timeout: 20000 });
+  await expect(reply).toContainText('Nicole Demara');
+});
+
 test("Claude Code's own error text is shown, and a crash is not called a sign-out (decision 184)", async ({ app }) => {
   await fakeLinux(app);
   await app.click('#model-btn');

@@ -1,5 +1,6 @@
 // 🖥 PC agents: a chat whose replies come from an ACP agent on your computer (through scripts/acp-bridge.py).
-import { $, chatPersona, chatPrompt, el, enabledTools, hooks, state, toast, toolsOn, uid, userName } from './core.js';
+import { $, chatPersona, chatPrompt, el, enabledTools, hooks, pref, state, toast, toolsOn, uid, userName } from './core.js';
+import { perfReport } from '../perf.js';
 import { saveSettings } from '../store.js';
 import { httpRequest, setCcTextRunner } from '../api.js';
 import { logError } from '../errorlog.js';
@@ -14,6 +15,8 @@ import { rerenderLast, updateHeader } from './render.js';
 
 const agents = () => (state.settings.acpAgents ||= []);
 const clients = new Map(); // agent id → { client, ready: Promise }
+/** Claude Code in Linux is running (its bridge answers): Linux is up, a look at its processes starts nothing new. */
+hooks.ccBridgeUp = () => !!clients.get(AGENT_ID) && !clients.get(AGENT_ID).client.closed;
 const bySession = new Map(); // ACP session id → { conv, msg }
 const STOPPED = new Error('stopped'); // Stop pressed before the message reached the agent
 const STOP_WAIT = 6000; // after Stop, how long the agent has to end its turn before the chat moves on
@@ -95,6 +98,11 @@ function clientFor(agent) {
     return onUpdate(u, sid);
   };
   client.onPermission = onPermission;
+  // the answer to a permission question could not be delivered, even after retries: said, not left hanging (decision 254)
+  client.onPermissionLost = (p) => {
+    logError('claudecode', `Your answer to "${p?.toolCall?.title || 'a permission question'}" did not reach Claude Code – it may still be waiting for it. Stop the reply and send again.`);
+    toast('Your answer did not reach Claude Code – Stop the reply and send again', 6000);
+  };
   if (agent.phone) client.onMcp = onMcp; // only the phone's own bridge has the MCP endpoint we hand out
   // a Chronicle tool answered after Claude Code had stopped waiting for it: into the error log (decision 178)
   client.onMcpLate = ({ tool, seconds, error }) => logError('claudecode', `Claude Code had stopped waiting for ${tool || 'a Chronicle tool'} – Chronicle finished it after ${seconds} s, but the answer could not be delivered (${error})`, { tool });
@@ -105,11 +113,71 @@ function clientFor(agent) {
   return c;
 }
 
+/** What Claude Code reads when a session starts – its MCP servers and the tool options (a model's hidden task passes
+ * its own handle and origin): one place for a send's new session, the ladder's reopen and the prewarm, so a session picked up early is the one the send would have made. */
+function ccSessionArgs(conv, agent, origin = '', handle = null) {
+  const all = (hooks.ccTools?.(conv, { origin }) || []).map((t) => t.name);
+  const token = bridgeMcpToken();
+  const own = userServers(state.settings.mcpServers, { on: toolsOn(conv) && enabledTools(conv).mcp !== false });
+  const toolNames = token ? all : []; // without the bridge's token the phone tools do not reach Claude Code
+  const mcpServers = [...(toolNames.length ? [chronicleServer(agent.url, handle || handleOf(conv), token)] : []), ...own.list];
+  // Chronicle asks for its own tools itself (your permissions, Ask first, Bypass): Claude Code need not ask again
+  const meta = { claudeCode: { options: { ...(toolNames.length ? { allowedTools: [`mcp__${SERVER}__*`] } : {}), ...(own.deny.length ? { disallowedTools: own.deny } : {}) } } };
+  return { toolNames, mcpServers, meta };
+}
+
+/** A session that died (the app's Linux was stopped while the chat was away) is picked up when the chat is shown,
+ * not when you press send – quiet, and a failure changes nothing: the send's own ladder says what is wrong then.
+ * cGiven ({ client, ready, cwd }: tests) stands in for the looked-up client. */
+const prewarming = new WeakMap(); // conv → the pick-up in progress: a send waits for it instead of doing it twice
+hooks.ccPrewarm = (conv, cGiven = null) => {
+  if (!conv?.acp?.sessionId || prewarming.has(conv) || state.runs?.has?.(conv.id)) return prewarming.get(conv);
+  const p = prewarm(conv, cGiven);
+  prewarming.set(conv, p);
+  return p;
+};
+async function prewarm(conv, cGiven) {
+  try {
+    const agent = cGiven ? null : agents().find((a) => a.id === conv.acp.agentId);
+    if (!cGiven && !agent) return;
+    const c = cGiven || clientFor(agent);
+    await c.ready; // the initialize reply (what this adapter can do) is only there after this
+    const sid = conv.acp.sessionId;
+    if (c.client.sessions?.has(sid)) return;
+    const folder = agent?.phone ? await chatFolder(conv).catch(() => '') : '';
+    const cwd = cGiven?.cwd ?? (agent?.phone ? folder || agent.cwd || '/root' : '.');
+    const { mcpServers, meta } = agent?.phone ? ccSessionArgs(conv, agent) : { mcpServers: [], meta: null };
+    const quiet = (p, secs) => {
+      let t;
+      return Promise.race([p, new Promise((_, rej) => (t = setTimeout(() => rej(new Error(`did not finish in ${secs} s`)), secs * 1000)))]).finally(() => clearTimeout(t));
+    };
+    // the send's ladder, its order: acp.js answers false at once when the adapter cannot load or resume, so a
+    // capability that is not there costs nothing here either
+    const a = await quiet(c.client.loadSession(sid, cwd, { mcpServers, meta }), 120).then((ok) => ({ ok: !!ok }), () => ({ ok: false }));
+    const b = a.ok ? a : await quiet(c.client.resumeSession?.(sid, cwd, { mcpServers, meta }) ?? false, 120).then((ok) => ({ ok: !!ok }), () => ({ ok: false }));
+    if (b.ok) (c.client.sessions ||= new Set()).add(sid); // what the send checks: with the sid here it skips its ladder
+  } catch {
+    /* quiet: the send's own ladder says what is wrong */
+  } finally {
+    prewarming.delete(conv);
+  }
+}
+
 /** The reply's text: what the agent said, with its tool calls as lines in between. */
 function compose(msg) {
   const { rounds, content } = acpRounds(msg.acpParts);
   msg.rounds = rounds;
   return content;
+}
+/** One rebuild and render per burst of chunks (the parts themselves are kept at once): a long turn is linear now. */
+const composing = new Map(); // msg → its pending compose timer
+function composeSoon(msg, conv) {
+  if (composing.has(msg)) return;
+  composing.set(msg, setTimeout(() => {
+    composing.delete(msg);
+    msg.content = compose(msg);
+    if (state.current === conv) rerenderLast();
+  }, 120));
 }
 function onUpdate(u, sid) {
   if (watchers.has(sid)) return watchers.get(sid)(u);
@@ -117,6 +185,15 @@ function onUpdate(u, sid) {
   if (!at) return;
   const { conv, msg } = at;
   const r = readUpdate(u);
+  if (at.timing && !at.timing.first && (r.text || r.thought || r.tool)) at.timing.first = performance.now();
+  // the point before the message this turn answers: a retry or an edit of it forks the session there (decision 253)
+  // (with the session it belongs to: a turn that announces none – the first one in a forked or resumed session, which
+  // holds nothing to anchor it to – keeps the one before, and a fork goes back to that session's stored history, 255)
+  if (r.cursor && at.user && !at.cursorTaken) {
+    at.cursorTaken = true;
+    at.user.acpCursor = r.cursor;
+    at.user.acpCursorSid = sid;
+  }
   if (r.text) {
     const last = msg.acpParts[msg.acpParts.length - 1];
     if (last?.t === 'text') last.s += r.text;
@@ -135,8 +212,7 @@ function onUpdate(u, sid) {
     if (state.current === conv) hooks.updateContextChip?.();
   }
   if (r.config && at.phone) hooks.ccConfigSeen?.(r.config);
-  msg.content = compose(msg);
-  if (state.current === conv) rerenderLast();
+  composeSoon(msg, conv);
 }
 /**
  * The ACP client of Claude Code in Linux, the bridge started (again) when it is not running – for the app's own
@@ -151,10 +227,17 @@ hooks.ccClient = async () => {
   return { client: c.client, watch: (sid, fn) => (fn ? watchers.set(sid, fn) : watchers.delete(sid)) };
 };
 /** A chat let go of its Claude Code session (it picked a normal model): closed, if that connection is live. */
-hooks.acpCloseSession = (agentId, sid) => {
+hooks.acpCloseSession = (agentId, sid, conv = null) => {
   const c = clients.get(agentId);
   if (sid && c && !c.client.closed) c.ready.then(() => c.client.closeSession(sid)).catch(() => {});
   bySession.delete(sid);
+  // the chat's handle and its tool runs go with the session: a deleted chat's conv is not kept alive
+  if (conv) {
+    const h = mcpHandles.get(conv.id);
+    if (h) mcpChats.delete(h);
+    mcpHandles.delete(conv.id);
+    mcpRuns.delete(conv.id);
+  }
 };
 /** The phone's own Claude Code: its connection is dropped when the bridge is restarted or stopped. */
 hooks.acpForget = (agentId) => {
@@ -163,7 +246,16 @@ hooks.acpForget = (agentId) => {
 };
 async function onPermission(p) {
   if (permits.has(p.sessionId)) return permits.get(p.sessionId)(p); // a hidden task's question: its own wording, its chat
-  const at = bySession.get(p.sessionId) || [...bySession.values()].at(-1);
+  // a question goes to the chat that owns its session – never to whichever chat was touched last
+  let at = bySession.get(p.sessionId);
+  if (!at) {
+    const conv = state.convs.find((x) => x.acp?.sessionId === p.sessionId);
+    if (conv) at = { conv, phone: conv.acp.agentId === AGENT_ID };
+  }
+  if (!at) {
+    logError('claudecode', 'A permission question came from a session no chat owns – answered "cancelled"', { session: p.sessionId });
+    return null;
+  }
   const opts = p.options || [];
   if (!opts.length) return null;
   const title = p.toolCall?.title || 'do something';
@@ -190,12 +282,8 @@ hooks.ccTask = async (conv, { task, model = '', effort = '', signal, onProgress 
   await hooks.ccSyncSkills?.().catch(() => {});
   const handle = newHandle();
   mcpChats.set(handle, { conv, origin: ORIGIN_MODEL });
-  let toolNames = (hooks.ccTools?.(conv, { origin: ORIGIN_MODEL }) || []).map((t) => t.name);
-  const token = bridgeMcpToken();
-  if (!token) toolNames = [];
-  const own = userServers(state.settings.mcpServers, { on: toolsOn(conv) && enabledTools(conv).mcp !== false });
-  const mcpServers = [...(toolNames.length ? [chronicleServer(agent.url, handle, token)] : []), ...own.list];
-  const meta = { claudeCode: { options: { ...(toolNames.length ? { allowedTools: [`mcp__${SERVER}__*`] } : {}), ...(own.deny.length ? { disallowedTools: own.deny } : {}) } } };
+  // the chat's own session's shape, with this task's handle and tools (origin: without ask_model)
+  const { toolNames, mcpServers, meta } = ccSessionArgs(conv, agent, ORIGIN_MODEL, handle);
   const stopTools = () => {
     for (const ac of mcpRuns.get(handle) || []) ac.abort(); // a Chronicle tool it is running stops too
   };
@@ -233,6 +321,7 @@ hooks.ccTask = async (conv, { task, model = '', effort = '', signal, onProgress 
  * a Claude Code process under proot, and several at once would only slow each other down.
  */
 let ccTextQueue = Promise.resolve();
+const CC_TEXT_LIMIT_MS = globalThis.__ocmCcTextLimitMs || 5 * 60 * 1000;
 setCcTextRunner(({ value, messages }, h) => {
   const ac = new AbortController();
   const job = async () => {
@@ -259,7 +348,16 @@ setCcTextRunner(({ value, messages }, h) => {
     if (!r.text) throw new Error('Claude Code gave no answer');
     return r.text;
   };
-  const run = ccTextQueue.then(job);
+  // one job at a time – and a job that never answers (a session that does not start, a prompt with no end) gives up
+  // after 5 minutes or on its Stop, so the jobs after it are not held up for good (decision 256)
+  const limited = () =>
+    new Promise((resolve, reject) => {
+      const t = setTimeout(() => (reject(new Error('Claude Code did not answer this background job in 5 minutes')), ac.abort()), CC_TEXT_LIMIT_MS);
+      const onAbort = () => reject(new Error('Stopped'));
+      ac.signal.addEventListener('abort', onAbort, { once: true });
+      job().then(resolve, reject).finally(() => (clearTimeout(t), ac.signal.removeEventListener('abort', onAbort)));
+    });
+  const run = ccTextQueue.then(limited);
   ccTextQueue = run.catch(() => {});
   run.then(
     (text) => {
@@ -290,6 +388,8 @@ hooks.agentPreview = (conv) => {
 };
 hooks.acpRespond = async (conv) => {
   let agent = agents().find((a) => a.id === conv.acp.agentId);
+  // the turn begins: the last turn's entry is dropped, so history replayed by a session/load cannot land in a finished reply
+  bySession.delete(conv.acp?.sessionId);
   // a chat that picked Claude Code in the model picker: the bridge is started on the first message (no card needed)
   const picked = conv.acp.agentId === AGENT_ID && (conv.acp.cc || conv.acp.model);
   const ccName = picked ? hooks.ccModelName?.(conv.acp.model) : '';
@@ -323,25 +423,36 @@ hooks.acpRespond = async (conv) => {
     return step(Promise.race([p, late]).finally(() => clearTimeout(t)));
   };
   let watch = null;
+  // 🩺 how long each step took (decision 251): kept in the Timing history when Timings is on
+  const timing = { t0: performance.now(), marks: [], first: 0, others: [...state.runs.keys()].filter((id) => id !== conv.id && state.convs.find((x) => x.id === id)?.acp).length };
+  const mark = (name) => timing.marks.push([name, performance.now()]);
   hooks.beginRun(conv, run);
   let folder = '';
   let sent = false; // the message reached Claude Code's session
+  let entryKey = null; // this turn's bySession key, taken back when the turn ends
+  let forked = false; // this turn forked the session; rolled back if the send failed
+  let priorSid = null; // the session id the fork came from
+  const liAt = conv.messages.findLast((m) => m.role === 'user'); // the user message this reply answers, pinned before any step (edits mid-turn must not retarget it)
   try {
     if (!agent && !picked) throw new Error('This PC agent was removed in Settings');
     // Claude Code in Linux: started (again) when it is not running – after the app restarted the secret is gone
     if (picked || agent.phone) {
       stage('starting Claude Code…');
+      const wasUp = !!hooks.ccBridgeUp?.();
       await within(Promise.resolve(hooks.claudeCodeEnsure?.()), 180, 'Starting Claude Code');
+      mark(wasUp ? 'Claude Code was running' : 'Claude Code started (it was not running)');
       agent = agents().find((a) => a.id === conv.acp.agentId) || agent;
       if (!agent) throw new Error('it did not start');
     }
     const cc = !!(picked || agent.phone);
     // a picker chat works in its own workspace (its files show in 📁); the card's chats in the card's folder
     folder = cc ? await within(chatFolder(conv), 60, "Finding this chat's folder in Linux") : '';
+    mark("chat's folder found");
     const cwd = agent.phone ? folder || agent.cwd || '/root' : '.';
     const c = clientFor(agent);
     stage(cc ? 'connecting to Claude Code…' : 'connecting to the agent on your PC…');
     await within(c.ready, 90, cc ? 'Connecting to Claude Code' : 'Connecting to the PC agent');
+    mark('connected');
     // Claude Code gets Chronicle's skills (~/.claude/skills), its phone tools (the "chronicle" MCP server on the
     // bridge) and the user's own MCP servers (decision 166)
     let mcpServers = [];
@@ -349,17 +460,19 @@ hooks.acpRespond = async (conv) => {
     let toolNames = [];
     if (cc) {
       await within(Promise.resolve(hooks.ccSyncSkills?.()).catch(() => {}), 60, 'Copying the skills').catch((e) => (e === STOPPED ? Promise.reject(e) : null));
-      toolNames = (hooks.ccTools?.(conv) || []).map((t) => t.name);
-      const token = bridgeMcpToken();
-      const own = userServers(state.settings.mcpServers, { on: toolsOn(conv) && enabledTools(conv).mcp !== false });
-      mcpServers = [...(token && toolNames.length ? [chronicleServer(agent.url, handleOf(conv), token)] : []), ...own.list];
-      if (!token) toolNames = [];
-      // Chronicle asks for its own tools itself (your permissions, Ask first, Bypass): Claude Code need not ask again
-      meta = { claudeCode: { options: { ...(toolNames.length ? { allowedTools: [`mcp__${SERVER}__*`] } : {}), ...(own.deny.length ? { disallowedTools: own.deny } : {}) } } };
+      mark('skills copied');
+      ({ toolNames, mcpServers, meta } = ccSessionArgs(conv, agent));
       if (folder) {
         stage("syncing this chat's files with Linux…");
         await within(Promise.resolve(hooks.ccSyncWorkspace?.(conv, 'a')).catch(() => {}), 180, "Syncing this chat's files"); // files the user added, into the folder
+        mark("chat's files synced");
       }
+    }
+    // a pick-up of this chat's session started when it was shown: waited for, not done a second time beside it (254)
+    const warming = prewarming.get(conv);
+    if (warming) {
+      stage('picking up the earlier session…');
+      await within(warming.catch(() => {}), 250, 'Picking up the session').catch((e) => (e === STOPPED ? Promise.reject(e) : null));
     }
     let sid = conv.acp.sessionId;
     // why a new session starts, when one does (decision 234): said in the reply and kept in the error log – it costs the
@@ -370,8 +483,12 @@ hooks.acpRespond = async (conv) => {
       // the session is still on disk – reopened by session/load, else session/resume
       stage('picking up the earlier session…');
       const tryBack = (fn) => within(fn(), 120, 'Picking up the session').then((ok) => ({ ok }), (e) => (e === STOPPED ? Promise.reject(e) : { ok: false, err: String(e?.message || e) }));
-      const a = await tryBack(() => c.client.loadSession(sid, cwd, { mcpServers, meta }));
+      // session/load is paid only when the adapter said it can load: an adapter that cannot only answers after its
+      // whole budget, for nothing. No capabilities reported (an older adapter): both are tried, as before.
+      const caps = c.client.info?.agentCapabilities;
+      const a = caps && caps.loadSession === false ? { ok: false } : await tryBack(() => c.client.loadSession(sid, cwd, { mcpServers, meta }));
       const b = a.ok ? a : await tryBack(() => c.client.resumeSession?.(sid, cwd, { mcpServers, meta }) ?? Promise.resolve(false));
+      mark(b.ok ? 'earlier session reopened' : 'earlier session could not be reopened');
       if (!b.ok) {
         const err = a.err || b.err || '';
         why = `Claude Code had been restarted (Android stops the app's Linux after a while in the background) and could not reopen this chat's session${err ? ` (${err.slice(0, 160)})` : c.client.info?.agentCapabilities?.loadSession || c.client.info?.agentCapabilities?.sessionCapabilities?.resume ? '' : ' – this Claude Code cannot reopen sessions'}`;
@@ -409,14 +526,38 @@ hooks.acpRespond = async (conv) => {
     // with the chat as it is now as context
     const li = conv.messages.findLastIndex((m) => m.role === 'user');
     if (sid && cc && conv.acp.seen && conv.acp.seen !== historySig(conv.messages.slice(0, Math.max(0, li)))) {
-      c.client.closeSession?.(sid).catch?.(() => {});
-      sid = null;
-      why = 'the chat changed since Claude Code last saw it (an edit, a retry, a swipe or a deleted message)';
+      // only this last message's turn changed (its reply asked again or swiped, the message edited): the session is
+      // copied up to just before that message and goes on from there – the whole story as real turns, not a cut-down
+      // copy of the chat as text (decision 253)
+      const u = conv.messages[li];
+      if (u?.acpCursor && u.acpSigBefore === historySig(conv.messages.slice(0, li)) && c.client.canFork) {
+        stage('going back to before your last message…');
+        try {
+          priorSid = sid; // the session the fork replaces, rolled back to if the send fails
+          // forked from the session the cursor belongs to – after an earlier fork that is the original one, which is closed
+          // but whose stored history the adapter forks from (decision 255)
+          const nid = await within(c.client.forkSession(u.acpCursorSid || sid, u.acpCursor, cwd, { systemPrompt: persona, mcpServers, meta }), 120, 'Going back in the session');
+          c.client.closeSession?.(sid).catch?.(() => {});
+          sid = nid;
+          conv.acp.sessionId = nid;
+          forked = true;
+          mark('session copied to before your last message');
+        } catch (e) {
+          if (e === STOPPED) throw e;
+          mark(`going back failed (${String(e?.message || e).slice(0, 80)})`);
+        }
+      }
+      if (!forked) {
+        c.client.closeSession?.(sid).catch?.(() => {});
+        sid = null;
+        why = 'the chat changed since Claude Code last saw it (an edit, a retry, a swipe or a deleted message)';
+      }
     }
     let fresh = false;
     if (!sid) {
       stage(why ? `${why} – starting a new session with the chat so far…` : 'starting a session…');
       sid = await within(c.client.newSession(cwd, { systemPrompt: persona, mcpServers, meta }), 180, 'Starting a Claude Code session');
+      mark(why ? `new session started (${why.split(' (')[0].slice(0, 80)})` : 'new session started');
       conv.acp.promptSig = sig;
       fresh = true;
       if (why && li > 0) {
@@ -432,9 +573,11 @@ hooks.acpRespond = async (conv) => {
       const eff = effortStep(c.client.configs.get(sid), state.settings.effort?.[`cc:${conv.acp.model || 'default'}`]);
       if (eff) await step(c.client.setConfigOption(sid, ...eff).catch(() => {}));
       if (c.client.configs.get(sid)) hooks.ccConfigSeen?.(c.client.configs.get(sid));
+      if (ms || eff) mark('model and effort set');
     }
     (c.client.sessions ||= new Set()).add(sid);
-    bySession.set(sid, { conv, msg, phone: !!agent.phone });
+    bySession.set(sid, { conv, msg, phone: !!agent.phone, timing, user: picked ? conv.messages[li] : null });
+    entryKey = sid;
     onStop = () => {
       c.client.cancel(sid);
       for (const ac of mcpRuns.get(conv.id) || []) ac.abort(); // a Chronicle tool it is running stops too
@@ -444,8 +587,13 @@ hooks.acpRespond = async (conv) => {
     // a chat that comes to Claude Code with messages already in it: the new session gets them as context
     // a roleplay: what this reply needs now (world info the last messages trigger, author's note…) goes with the message
     const turn = cc ? hooks.rpTurnContext?.(conv) || '' : '';
-    const said = turn ? `[Roleplay context for this reply – follow it, never mention it]\n${turn}\n[End of context]\n\n${last?.content || ''}` : last?.content || '';
-    let text = (picked || agent.phone) && fresh ? withEarlierTurns(conv.messages.slice(0, Math.max(0, li)).map((m) => (m.acpParts?.length ? { ...m, content: agentReplyText(m.acpParts) } : m)), said) : said;
+    // messages of the user whose reply never reached Claude Code (stopped, or a step timed out before sending): they go
+    // with this one, instead of counting as "the chat changed" and costing a new session (decision 252)
+    const missed = fresh ? [] : conv.messages.slice(0, Math.max(0, li)).filter((m) => m.acpUnsent && m.role === 'user' && String(m.content || '').trim());
+    const missedText = missed.length ? `[Earlier message${missed.length > 1 ? 's' : ''} of mine that did not reach you – the reply was stopped before it was sent:\n${missed.map((m) => m.content.trim()).join('\n\n')}]\n\n` : '';
+    const said = (turn ? `[Roleplay context for this reply – follow it, never mention it]\n${turn}\n[End of context]\n\n` : '') + missedText + (last?.content || '');
+    const names = hooks.rpCharName?.(conv) ? { userName: userName(conv), charName: hooks.rpCharName(conv) } : {};
+    let text = (picked || agent.phone) && fresh ? withEarlierTurns(conv.messages.slice(0, Math.max(0, li)).map((m) => (m.acpParts?.length ? { ...m, content: agentReplyText(m.acpParts) } : m)), said, undefined, names) : said;
     // an agent that takes no system prompt: the persona at the top of the session's first message instead
     if (fresh && persona && !c.client.takesSystemPrompt) text = `[How to act in this chat]\n${persona}\n\n${text}`;
     // pictures attached to this message are in the chat's own folder (synced before the turn): Claude Code opens them
@@ -455,7 +603,9 @@ hooks.acpRespond = async (conv) => {
       messages: [...(fresh && persona && c.client.takesSystemPrompt ? [{ role: 'system', content: persona }] : []), { role: 'user', content: text }],
       note: fresh ? `A new ${cc ? 'Claude Code' : 'agent'} session, started with what is shown here.` : `Sent into the ${cc ? 'Claude Code' : 'agent'} session already running: it has the prompt it started with, and the turns since.`,
     });
-    sent = cc;
+    // this message gets the cursor the session announces for it now (an older one was of another session or turn)
+    // the cursor this message already has (from an earlier turn of it) is kept until this turn announces a new one // they reach it now (with this message, or in the chat so far)
+    mark(fresh && li > 1 ? `message sent (with the ${li} earlier messages)` : 'message sent');
     // sent: the reply is Claude Code's now. Long quiet stretches can be real work, so no time limit – but it is said
     stage(fresh && li > 1 ? `sent, with the ${li} earlier messages as context – waiting for Claude Code…` : 'waiting for Claude Code…');
     let seen = -1;
@@ -472,7 +622,14 @@ hooks.acpRespond = async (conv) => {
       if (mins >= 2) stage(`no word from Claude Code for ${mins} min – it may still be working. ⏹ Stop ends this turn; then send again (a new session starts if needed).`);
     }, 15000);
     // after Stop: the agent's own end of the turn, or this chat moves on after a few seconds without it
-    const r = await Promise.race([c.client.prompt(sid, text), stopped.then(() => new Promise((res) => setTimeout(() => res({ stopReason: 'cancelled' }), STOP_WAIT)))]);
+    // sent once the bridge has taken the message (decision 254): an error later in the turn does not make it "never
+    // reached Claude Code" – the session has it, and sending it again would say it twice
+    const onSent = () => {
+      sent = cc;
+      for (const m of conv.messages.slice(0, Math.max(0, li))) if (m.role === 'user') delete m.acpUnsent; // they reach it now
+      if (last?.role === 'user') last.acpSigBefore = historySig(conv.messages.slice(0, li)); // the chat before it, as the session has it
+    };
+    const r = await Promise.race([c.client.prompt(sid, text, { onSent }), stopped.then(() => new Promise((res) => setTimeout(() => res({ stopReason: 'cancelled' }), STOP_WAIT)))]);
     if (r?.stopReason && r.stopReason !== 'end_turn') msg.acpParts.push({ t: 'text', s: `\n\n_(stopped: ${r.stopReason})_` });
   } catch (e) {
     if (e === STOPPED) {
@@ -481,12 +638,29 @@ hooks.acpRespond = async (conv) => {
     if (msg.error) logError(picked || agent?.phone ? 'claudecode' : 'reply', msg.error, { conv: conv.id, title: conv.title, model: msg.model });
   } finally {
     clearInterval(watch);
-    if (folder) await hooks.ccSyncWorkspace?.(conv, 'b').catch(() => {}); // what Claude Code wrote, into the chat's 📁
+    const pend = composing.get(msg);
+    if (pend) { clearTimeout(pend); composing.delete(msg); } // the turn's own final compose replaces the pending one
     msg.content = compose(msg);
+    bySession.delete(entryKey); // the turn is over: a late chunk lands nowhere, not unseen in a finished reply
     msg.streaming = false;
     delete msg.note;
+    // a Claude Code reply that never reached it: it and the message it answered are not part of what the session saw
+    if (!sent && (picked || agent?.phone)) {
+      msg.acpUnsent = true;
+      if (liAt?.role === 'user') liAt.acpUnsent = true;
+    }
+    if (!sent && forked) conv.acp.sessionId = priorSid; // the fork never got the message: next turn resumes from the session it forked from
     if (sent && conv.acp) conv.acp.seen = historySig(conv.messages); // the chat as this session knows it
     hooks.endRun(conv, run, { finished: true });
+    // what Claude Code wrote, into the chat's 📁 – after the reply is done (decision 254): a slow or stuck sync no
+    // longer keeps the reply "writing" with Stop doing nothing; the next sync of this chat waits for it (bridge.js)
+    if (folder) {
+      let t;
+      Promise.race([Promise.resolve(hooks.ccSyncWorkspace?.(conv, 'b')), new Promise((_, rej) => (t = setTimeout(() => rej(new Error('timed out')), 180000)))])
+        .catch((e) => logError('claudecode', `Bringing Claude Code's files into the chat did not finish: ${e?.message || e}`, { conv: conv.id, title: conv.title }))
+        .finally(() => clearTimeout(t));
+    }
+    if (pref('perfTrace')) perfReport(...ccTimingReport(conv, timing, msg));
     persist(conv);
     if (state.current === conv) rerenderLast();
     hooks.replyDone?.(msg);
@@ -499,7 +673,9 @@ export function historySig(messages) {
   let h = 2166136261;
   let n = 0;
   for (const m of messages || []) {
-    if (m.greeting) continue;
+    // never reached the session (decisions 252, 254): neither the reply nor the message it answered – the message goes
+    // with the next send, and until then the session's view of the chat is without both
+    if (m.greeting || m.acpUnsent) continue;
     const t = `${m.role}|${m.hidden ? 1 : 0}|${m.content || ''}\n`;
     for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 16777619);
     n++;
@@ -587,3 +763,27 @@ $('#acp-add').onclick = () => {
   renderAgents();
 };
 $('#acp-box').addEventListener('toggle', () => $('#acp-box').open && renderAgents());
+
+/** 🩺 A Claude Code reply's steps with their times (decision 251) → [text, meta] for the Timing history. */
+export function ccTimingReport(conv, timing, msg = {}) {
+  const t0 = timing.t0;
+  const end = performance.now();
+  const s = (t) => `${((t - t0) / 1000).toFixed(1)} s`;
+  const lines = [`Claude Code reply in “${(conv.title || 'a chat').replace(/\s+/g, ' ').slice(0, 40)}”:`];
+  let prev = t0;
+  let slow = ['', 0];
+  for (const [name, t] of timing.marks) {
+    lines.push(`  ${s(t).padStart(7)}  ${name} (+${((t - prev) / 1000).toFixed(1)} s)`);
+    if (t - prev > slow[1]) slow = [name, t - prev];
+    prev = t;
+  }
+  const sentAt = timing.marks.findLast?.(([n]) => n.startsWith('message sent'))?.[1] || prev;
+  if (timing.first) lines.push(`  ${s(timing.first).padStart(7)}  first words from Claude Code (+${((timing.first - sentAt) / 1000).toFixed(1)} s after sending)`);
+  lines.push(`  ${s(end).padStart(7)}  ${msg.error ? 'ended with an error' : 'reply done'}`);
+  if (timing.others) lines.push(`  ${timing.others} other Claude Code repl${timing.others === 1 ? 'y was' : 'ies were'} running at the same time (one Claude Code, sharing the phone)`);
+  const firstMs = timing.first ? timing.first - t0 : end - t0;
+  const thinking = timing.first ? timing.first - sentAt : 0;
+  if (thinking > slow[1]) slow = ['Claude Code itself, until its first words', thinking];
+  const line = `first words after ${(firstMs / 1000).toFixed(1)} s · slowest: ${slow[0] || '–'} (${(slow[1] / 1000).toFixed(1)} s)${timing.others ? ` · ${timing.others} other at the same time` : ''}`;
+  return [lines.join('\n'), { label: `Claude Code reply – “${(conv.title || 'a chat').slice(0, 30)}”`, slow: firstMs >= 15000, line }];
+}

@@ -87,11 +87,14 @@ def mcp_run(pid, sid, line):
     except Exception as e:
         chunk(sid, "MCP failed: " + repr(e))
     send({"jsonrpc": "2.0", "id": pid, "result": {"stopReason": "end_turn"}})
+CURSORS = False
 def chunk(sid, text): send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("method") == "initialize":
-        caps = {"close": {}, "systemPrompt": {"mode": {"override": {}}}}
+        # like claude-agent-acp (decision 253): cursors for a client that declares session.cursors, and session/fork
+        CURSORS = ((m.get("params") or {}).get("clientCapabilities") or {}).get("session", {}).get("cursors") is not None
+        caps = {"close": {}, "systemPrompt": {"mode": {"override": {}}}, "fork": {}}
         if STORE:
             caps["resume"] = {}
         send({"jsonrpc": "2.0", "id": m["id"], "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": False, "sessionCapabilities": caps}, "authMethods": []}})
@@ -111,6 +114,17 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": m["id"], "result": {"sessionId": sid, "configOptions": config(sessions[sid])}})
         # like claude-agent-acp after a session is set up: its slash commands
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "compact", "description": "Clear conversation history but keep a summary in context", "input": {"hint": "<optional custom summarization instructions>"}}, {"name": "review", "description": "Review a pull request"}, {"name": "add-dir", "description": "Add a new working directory", "input": {"hint": "<path>"}}]}}})
+    elif m.get("method") == "session/fork":
+        src = sessions.get(m["params"]["sessionId"])
+        hist = (src or {}).get("hist", [])
+        at = next((i for i, h in enumerate(hist) if h["cursor"] == m["params"].get("cursorId")), None)
+        if src is None or at is None:
+            send({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32602, "message": "no such cursor"}})
+            continue
+        sid = "s" + str(len(sessions) + len(stored()) + 1)
+        sessions[sid] = {**src, "sets": [], "hist": hist[:at], "forkedFrom": m["params"]["sessionId"], "mcp": m["params"].get("mcpServers") or src.get("mcp", []), "closed": False, "unanchored": True}
+        store(sid, sessions[sid])
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"sessionId": sid, "configOptions": config(sessions[sid])}})
     elif m.get("method") == "session/set_config_option":
         p = m["params"]; s = sessions[p["sessionId"]]
         s["model" if p["configId"] == "model" else "effort"] = p["value"]
@@ -126,6 +140,17 @@ for line in sys.stdin:
         if sessions.get(sid, {}).get("closed"):  # as claude-agent-acp: a closed session is gone
             send({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32603, "message": "Session not found"}})
             continue
+        # the history of the session, and the cursor before this prompt (none before the first one, as Claude Code)
+        s0 = sessions.setdefault(sid, {})
+        h = s0.setdefault("hist", [])
+        cur = "cur-" + sid + "-" + str(len(h)) if h else None
+        # as claude-agent-acp: a cursor lies after the last thing the client was shown – a forked or resumed session has
+        # shown nothing yet, so its first prompt gets none
+        anchored = not s0.get("unanchored")
+        s0["unanchored"] = False
+        h.append({"cursor": cur, "text": text})
+        if cur and CURSORS and anchored:
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "cursor_update", "cursorId": cur, "anchor": {"type": "agent_message", "messageId": "m", "position": "after"}, "capabilities": {"fork": {}}}}})
         if text.endswith("who are you?"):
             s = sessions[sid]
             chunk(sid, "SP(" + s["spmode"] + "): " + (s["sp"][:90] or "none"))
@@ -154,6 +179,9 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": m["id"], "result": {"stopReason": "end_turn"}})
             continue
         if "background text job" in sessions[sid]["sp"]:
+            # a job that never answers (decision 256: the ones after it must not wait on it for good)
+            if "HANG" in text:
+                continue
             # Chronicle's background jobs on Claude Code (decision 169): show what the job got
             s = sessions[sid]
             tools = (s["meta"].get("claudeCode") or {}).get("options", {}).get("tools")
@@ -177,7 +205,7 @@ for line in sys.stdin:
         if text.split("\n")[-1].startswith("echo "):
             s = sessions[sid]
             chunk(sid, "Echo from " + sid + " (model " + s["model"] + ", effort " + s["effort"] + ", set: " + (",".join(s["sets"]) or "nothing") + "): ")
-            chunk(sid, text.split("\n")[0] + " | prompt lines: " + str(text.count("\n") + 1))
+            chunk(sid, text.split("\n")[0] + " | prompt lines: " + str(text.count("\n") + 1) + ((" | forked from " + s["forkedFrom"] + " with " + str(len(s["hist"]) - 1) + " earlier turns") if s.get("forkedFrom") else ""))
             # like Claude Code after each turn: its own context in use and its window
             send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "usage_update", "used": 31500, "size": 1000000}}})
             send({"jsonrpc": "2.0", "id": m["id"], "result": {"stopReason": "end_turn"}})

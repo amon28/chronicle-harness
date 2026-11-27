@@ -736,11 +736,71 @@ public class PhonePlugin extends Plugin {
                 return;
             }
             call.getData().put("photoPath", f.getAbsolutePath());
-            startActivityForResult(call, i, "captured");
+            call.getData().put("isVideo", video);
+            // in a task of its own (decision 263): many camera apps answer the back button by sending their task to the
+            // background – in Chronicle's task that took Chronicle with it, to the home screen. Apart, only the camera
+            // goes, and Android shows Chronicle again. A camera started like that gives no result: the photo or video is
+            // looked for in the file it was given, when Chronicle is back in front.
+            // CLEAR_TASK: a camera sent to the background by its back button stays alive, and camera apps that keep one
+            // screen brought that one back – the photo camera when a video was asked for (decision 264). Its task is
+            // cleared and the camera starts afresh with what is asked now.
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NEW_DOCUMENT | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            if (pendingCapture != null) pendingCapture.reject("Nothing was recorded", "CANCELLED");
+            pendingCapture = call;
+            captureAway = false;
+            captureStarted = System.currentTimeMillis();
+            getActivity().startActivity(i);
         } catch (android.content.ActivityNotFoundException e) {
             call.reject("No camera app", "NO_APP");
         } catch (Throwable e) {
             call.reject(String.valueOf(e.getMessage()));
+        }
+    }
+
+    private PluginCall pendingCapture = null;
+    private boolean captureAway = false;
+    private long captureStarted = 0;
+
+    @Override
+    protected void handleOnPause() {
+        super.handleOnPause();
+        if (pendingCapture != null) captureAway = true;
+    }
+
+    @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        if (pendingCapture == null || !captureAway) return;
+        final PluginCall c = pendingCapture;
+        pendingCapture = null;
+        captureAway = false;
+        // a moment for the camera app to finish writing, then off the screen's thread (a video can be big)
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> new Thread(() -> finishCapture(c)).start(), 400);
+    }
+
+    /** The camera is gone: what it left in the file it was given (or, for a video, the newest one in the gallery). */
+    private void finishCapture(PluginCall call) {
+        File f = new File(call.getData().optString("photoPath", ""));
+        if ((!f.isFile() || f.length() == 0) && call.getData().optBoolean("isVideo", false)) newestVideoInto(f);
+        captured(call, new ActivityResult(f.isFile() && f.length() > 0 ? Activity.RESULT_OK : Activity.RESULT_CANCELED, null));
+    }
+
+    /** Some camera apps keep a video in their own gallery instead of the file given: the newest one since it opened. */
+    private void newestVideoInto(File f) {
+        Uri found = null;
+        String[] cols = { MediaStore.Video.Media._ID };
+        try (android.database.Cursor c = getContext().getContentResolver().query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cols, MediaStore.Video.Media.DATE_ADDED + " >= ?", new String[] { String.valueOf(captureStarted / 1000 - 5) }, MediaStore.Video.Media.DATE_ADDED + " DESC")) {
+            if (c != null && c.moveToFirst()) found = android.content.ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, c.getLong(0));
+        } catch (Exception ignored) {
+            return; // no access to the gallery: said as "nothing was recorded"
+        }
+        if (found == null) return;
+        try (java.io.InputStream in = getContext().getContentResolver().openInputStream(found); FileOutputStream out = new FileOutputStream(f)) {
+            if (in == null) return;
+            byte[] buf = new byte[1 << 20];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        } catch (Exception ignored) {
         }
     }
 

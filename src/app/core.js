@@ -184,7 +184,7 @@ setSaveErrorHandler((e) => {
   if (Date.now() - saveErrShown < 10000) return;
   saveErrShown = Date.now();
   const full = /quota|full|space/i.test(String(e?.name) + String(e?.message));
-  setTimeout(() => toast(full ? '⚠️ Phone storage is full – your last changes could not be saved. Free some space or delete big chats/files.' : `⚠️ Could not save settings: ${e?.message || e}`, 7000), 0);
+  setTimeout(() => toast(full ? '⚠️ Phone storage is full – your last changes could not be saved. Free some space or delete big chats/files.' : `⚠️ Could not save your changes: ${e?.message || e}`, 7000), 0);
 });
 
 // ---------- helpers ----------

@@ -126,10 +126,12 @@ export function routeToClaudeCode(conv, settings, opts = {}) {
  * The first prompt of a new Claude Code session in a chat that already has messages (a chat switched over, or back):
  * the conversation so far, so Claude Code is not starting blind. The newest part is kept when it is long.
  */
-export function withEarlierTurns(messages, text, max = 12000) {
-  const earlier = (messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.greeting && typeof m.content === 'string' && m.content.trim());
+// a new session gets the chat so far: up to ~250,000 characters (~60K tokens), the newest kept – it was 12,000, which
+// left a long roleplay with a few pages of its story (decision 252). Roleplays name the speakers.
+export function withEarlierTurns(messages, text, max = 250000, { userName = 'User', charName = 'Assistant' } = {}) {
+  const earlier = (messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.greeting && !(m.acpUnsent && m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());
   if (!earlier.length) return text;
-  let body = earlier.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.trim()}`).join('\n\n');
+  let body = earlier.map((m) => `${m.role === 'user' ? userName : charName}: ${m.content.trim()}`).join('\n\n');
   if (body.length > max) body = '…' + body.slice(-max);
   return `Earlier in this chat (before you joined it, for context):\n\n${body}\n\n---\n\n${text}`;
 }

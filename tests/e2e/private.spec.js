@@ -121,7 +121,7 @@ test('texts: asked every time with the search shown; never in a scheduled check'
   await app.evaluate(async () => {
     const t = Date.now();
     const conv = { id: 'smsq', title: 'Texts check', createdAt: t, updatedAt: t, personaId: 'general', messages: [{ role: 'user', content: 'hi', at: t }, { role: 'assistant', content: 'Hello.', personaId: 'general', model: 'glm-5.3', at: t }], schedules: [{ id: 'st_sms', prompt: 'DOCALLS [["messages",{"action":"sms_search","query":"DHL"}]]', next: t + 3600000, every: 60, quiet: true, created: t }] };
-    await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
+    await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
   });
   await app.reload();
   await app.waitForSelector('body[data-ready="1"]');

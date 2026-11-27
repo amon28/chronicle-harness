@@ -2,9 +2,9 @@ import { test, expect } from './helpers.js';
 
 const putConv = (app, conv) =>
   app.evaluate(async (conv) => {
-    await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
+    await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
   }, conv);
-const getConv = (app, id) => app.evaluate((id) => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const g = r.result.transaction('conversations').objectStore('conversations').get(id); g.onsuccess = () => res(g.result); }; }), id);
+const getConv = (app, id) => app.evaluate((id) => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const g = globalThis.__ocmChatReq(id); g.onsuccess = () => res(g.result); }; }), id);
 
 test('a plain task that is due together with a scheduled recipe is not dropped', async ({ app }) => {
   const t = Date.now();

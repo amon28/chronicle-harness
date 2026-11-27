@@ -21,7 +21,9 @@ const MAX_ENTRIES = 20000;
  * thousands of files there, and carrying them into the app's memory costs heap and time for nothing.
  * They are not deleted or hidden in the shell - the app just does not keep a copy.
  */
-export const SHELL_ONLY = new Set(['node_modules', '.git']);
+// (also caches a tool makes in the chat's folder – a virtualenv, Python's bytecode, a build cache, decision 259; the same
+// list is in FileModePlugin.java)
+export const SHELL_ONLY = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__', '.next', '.cache', '.gradle', '.tox', '.mypy_cache', '.pytest_cache', 'target']);
 /** Is this path inside a directory the app does not mirror? */
 export const shellOnly = (p) => String(p).split('/').some((s) => SHELL_ONLY.has(s));
 const CHUNK = 4 * 1024 * 1024; // base64 of this is ~5.3 MB: the heap spike per call
@@ -67,6 +69,33 @@ export async function hostPath(dir) {
  *                    directory could not be read). A caller must not infer a delete from an incomplete listing.
  *   out.excluded   - directories that are never walked (node_modules, .git): they stay in the shell only.
  */
+/** listTree's answer from FileModePlugin.modes({ stat: true }): every file's mode, size and time in one native walk. */
+function fromModes(dir, r) {
+  const out = new Map();
+  const modes = r.files || {};
+  for (const [p, st] of Object.entries(r.info || {})) {
+    if (p.endsWith(TMP_SUFFIX)) {
+      // a transfer that never finished (the app was killed mid-write): it was never visible, drop it
+      impl().deleteFile({ path: rel(dir, p), directory: Directory.Data }).catch(() => {});
+      continue;
+    }
+    if (shellOnly(p)) continue;
+    const entry = { size: Number(st?.[0]) || 0, mtime: Number(st?.[1]) || 0 };
+    const mode = modes[p];
+    if (typeof mode === 'number') {
+      entry.mode = mode & 0o777;
+      entry.exec = (entry.mode & 0o111) !== 0;
+    }
+    out.set(p, entry);
+    if (out.size >= MAX_ENTRIES) {
+      out.incomplete = 'more than ' + MAX_ENTRIES.toLocaleString('en-US') + ' files';
+      break;
+    }
+  }
+  out.incomplete ||= r.incomplete || '';
+  out.excluded = [...(r.excluded || [])];
+  return out;
+}
 export async function listTree(dir) {
   const out = new Map();
   let incomplete = '';
@@ -81,7 +110,9 @@ export async function listTree(dir) {
   let links = new Set(); // symbolic links (Android reports them): never followed, never mirrored
   if (api?.modes) {
     try {
-      const r = await api.modes({ path: rel(dir, '') });
+      const r = await api.modes({ path: rel(dir, ''), stat: true });
+      // the whole listing in that one call (decision 259): no call per folder
+      if (r?.info) return fromModes(dir, r);
       const files = r?.files || {};
       modeMap = files instanceof Map ? files : new Map(Object.entries(files));
       links = new Set(r?.links || []);
@@ -197,14 +228,21 @@ export async function writeFile(dir, path, bytes, { exec, mode, mtime } = {}) {
     }
     const st = await impl().stat({ path: tmp, directory: Directory.Data });
     if ((st.size ?? -1) !== total) throw new Error('wrote ' + st.size + ' of ' + total + ' bytes to ' + path);
-    await impl().deleteFile({ path: full, directory: Directory.Data }).catch(() => {});
+    // renamed over the old copy first (one step: the name never goes missing, as a shell reading it would see), and
+    // only when that is refused is the old copy deleted first (decision 256: deleting first left no file at all when the
+    // rename then failed for another reason)
     try {
       await impl().rename({ from: tmp, to: full, directory: Directory.Data });
-    } catch (e) {
-      // a folder of that name is in the way: one with no file anywhere in it (mkdir, or what a delete left) goes
-      if (!(await emptyTree(full))) throw e;
-      await impl().rmdir({ path: full, directory: Directory.Data, recursive: true });
-      await impl().rename({ from: tmp, to: full, directory: Directory.Data });
+    } catch {
+      await impl().deleteFile({ path: full, directory: Directory.Data }).catch(() => {});
+      try {
+        await impl().rename({ from: tmp, to: full, directory: Directory.Data });
+      } catch (e) {
+        // a folder of that name is in the way: one with no file anywhere in it (mkdir, or what a delete left) goes
+        if (!(await emptyTree(full))) throw e;
+        await impl().rmdir({ path: full, directory: Directory.Data, recursive: true });
+        await impl().rename({ from: tmp, to: full, directory: Directory.Data });
+      }
     }
     // The mode the caller states is applied as it is: a 644 must not arrive 666, a 600 must keep its
     // protection. A caller that only knows the exec bit keeps the old rule - a script that was

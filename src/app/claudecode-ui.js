@@ -6,9 +6,12 @@ import { $, hooks, state, toast } from './core.js';
 import { saveSettings } from '../store.js';
 import { openSheet } from './chatlist.js';
 import { canPty, canUseShell, LOGIN_SHELL, plain, shellStatus } from '../shell.js';
-import { AGENT_ID, DIR, NODE_MIN, agentEntry, authLabel, bridgeHealthy, bridgeState, ccExec, cleanCwd, pollInstall, readStatus, setChatsMount, startBridge, startInstall, stopBridge } from '../claudecode.js';
+import { AGENT_ID, DIR, NODE_MIN, agentEntry, authLabel, bridgeHealthy, bridgeState, ccExec, diagnoseBridge, cleanCwd, pollInstall, readStatus, setChatsMount, startBridge, startInstall, stopBridge } from '../claudecode.js';
 import { ccSkills, syncCcSkills } from '../ccskills.js';
 import { hostPath } from '../shellfs.js';
+import { cache } from '../store.js';
+import { httpRequest } from '../api.js';
+import { isNewer, latestVersion } from '../ccupdate.js';
 
 // the chats' workspaces bound into Claude Code's Linux at /chats (decision 166); none in the web build
 setChatsMount(() => (globalThis.__ocmCcChatsHost !== undefined ? globalThis.__ocmCcChatsHost : canUseShell() ? hostPath('work') : ''));
@@ -43,7 +46,8 @@ function render() {
   show('#cc-stop', run.running || !!st?.running);
   show('#cc-chat', run.running);
   $('#cc-install').disabled = !!st?.installing || !!polling;
-  $('#cc-install').textContent = installed ? 'Update' : 'Install';
+  const upd = updateInfo();
+  $('#cc-install').textContent = installed ? (upd ? `Update to ${upd.latest}` : 'Update') : 'Install';
   $('#cc-start').disabled = !installed || !!starting;
   $('#cc-start').textContent = run.running ? 'Restart' : 'Start';
   if (!st) return;
@@ -52,14 +56,43 @@ function render() {
   else {
     if (st.installing || polling) parts.push('Installing…');
     else if (installed) parts.push(`✓ Claude Code ${st.claude} installed (Node ${st.node})`);
+    if (installed && upd && !st.installing && !polling) parts.push(`⬆ Update available: ${upd.latest} (you have ${upd.installed})`);
     else if (st.nodeMajor && st.nodeMajor < NODE_MIN) parts.push(`Node ${st.node} is too old: Claude Code needs Node ${NODE_MIN} or newer. Remove and install Linux again (Settings › Linux terminal) to get the newest Alpine.`);
-    else parts.push('Not installed yet.');
+    else if (!installed) parts.push('Not installed yet.');
     if (installed) parts.push(st.auth === 'yes' ? `✓ ${authLabel(st)} (in Claude Code)` : `${authLabel(st)} – sign in inside Claude Code (step 2)`);
     if (run.running) parts.push(`● running on 127.0.0.1:${run.port} in ${run.cwd}`);
     else if (st.running) parts.push('● running from before – Restart to connect');
   }
   line.textContent = parts.join(' · ');
 }
+
+// ---------- update notice (decision 248) ----------
+/** { installed, latest } when the registry has a newer Claude Code than the one installed, else null. */
+function updateInfo() {
+  const installed = st?.claude || cache('ccReady')?.claude || '';
+  const latest = cache('ccLatest')?.version || '';
+  return installed && latest && isNewer(latest, installed) ? { installed: installed.replace(/\s*\(.*\)$/, ''), latest } : null;
+}
+hooks.ccUpdateInfo = updateInfo;
+let checking = null;
+/** Asked when Claude Code's status is read: the newest version (at most about once a day), and a word once per version. */
+hooks.ccCheckUpdate = (installed) => {
+  if (checking) return checking;
+  checking = latestVersion({ http: (u, o) => (globalThis.__ocmNpmHttp || httpRequest)(u, o), known: cache('ccLatest') })
+    .then((l) => {
+      if (l && l.at !== cache('ccLatest')?.at) cache('ccLatest', l);
+      render();
+      const u = updateInfo();
+      // said once per new version, when it is found (in a chat or in Settings): the card keeps saying it
+      if (u && cache('ccLatestTold') !== u.latest && isNewer(u.latest, installed || u.installed)) {
+        cache('ccLatestTold', u.latest);
+        toast(`Claude Code ${u.latest} is out (you have ${u.installed}) – Settings › Account & models › Claude Code in Linux › Update`, 6000);
+      }
+    })
+    .catch(() => {})
+    .finally(() => (checking = null));
+  return checking;
+};
 
 async function refresh() {
   if (!canUseShell()) {
@@ -157,7 +190,7 @@ hooks.ccSyncSkills = async () => {
     const prepared = await ccSkills(state.settings.agentSkills);
     if (prepared.signature === skillsSynced) return null;
     const r = await syncCcSkills(null, { exec: (cmd) => ccExec(cmd), dir: DIR, prepared });
-    skillsSynced = prepared.signature;
+    if (r.wrote.length >= r.need.length) skillsSynced = prepared.signature; // a partial write is retried on the next send
     if (r.user.length) console.warn('Claude Code skills: a folder of your own has the name, so it was left alone:', r.user.join(', '));
     return r;
   })().finally(() => (skillsSyncing = null));
@@ -172,11 +205,21 @@ hooks.ccSyncSkills = async () => {
 let warming = null;
 hooks.ccWarm = (conv) => {
   const cc = conv?.acp ? conv.acp.agentId === AGENT_ID : !!hooks.ccShown?.();
-  if (!cc || warming || bridgeState().running || !(st?.installed || hooks.ccIsReady?.())) return;
+  // the background protection is held while a Claude Code chat is the open one: Android stopping the app's Linux
+  // in the background kills every open session with it, and the next message pays the whole ladder again
+  hooks.ccKeepAlive?.(cc && !!(st?.installed || hooks.ccIsReady?.()));
+  if (!cc || warming || !(st?.installed || hooks.ccIsReady?.())) return;
+  if (bridgeState().running) {
+    hooks.ccPrewarm?.(conv); // already up: the chat's dead session is picked up now, not when you press send
+    return;
+  }
   warming = hooks
     .claudeCodeEnsure()
     .catch(() => {}) // a real send says what is wrong; a warm-up stays quiet
-    .finally(() => (warming = null));
+    .finally(() => {
+      warming = null;
+      hooks.ccPrewarm?.(conv); // the bridge came up: pick up the session while you read and type
+    });
 };
 
 hooks.claudeCodeEnsure = async () => {
@@ -184,14 +227,27 @@ hooks.claudeCodeEnsure = async () => {
     // a phone that just woke up (the app came back from the background) can be slow to answer for a few seconds: asked
     // again before Claude Code is restarted – a restart ends every open session, and the next message would have to
     // send the whole chat again (decision 234)
-    for (let i = 0; i < 4; i++) {
-      if (await bridgeHealthy()) return;
-      if (i < 3) await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
+    if (await bridgeHealthy()) return;
+    await new Promise((res) => setTimeout(res, 1500)); // a phone just woken up can be slow for a moment
+    if (await bridgeHealthy()) return;
+    // still no answer: Linux is asked whether the bridge is alive before it is restarted – a restart ends every open
+    // session, other chats' running replies too (decision 254)
+    const d = await diagnoseBridge().catch(() => ({ alive: false }));
+    if (d.alive) {
+      for (const ms of [3000, 4000, 5000]) {
+        await new Promise((res) => setTimeout(res, ms));
+        if (await bridgeHealthy()) return;
+      }
+      // alive but too busy to answer: with other Claude Code replies running, only this send fails – they go on
+      const others = [...(state.runs?.keys?.() || [])].some((id) => state.convs.find((c) => c.id === id)?.acp?.agentId === AGENT_ID);
+      if (others) throw new Error(`Claude Code is running but too busy to answer right now (${d.why || 'Linux is busy'}) – try again when the other chat's reply is done`);
     }
-    logError('claudecode', 'Claude Code did not answer after 4 tries – starting it again (open sessions are reopened from disk when it can)');
+    logError('claudecode', `Claude Code did not answer${d.alive ? ' for about 15 s' : ''} – starting it again (open sessions are reopened from disk when it can)${d.why ? `: ${d.why}` : ''}`);
   }
   if (!st?.installed) st = await readStatus().catch(() => st);
   hooks.ccStatusSeen?.(st);
+  // the check ran to its end (parseStatus sets answered): an empty answer is a busy Linux, not a missing install
+  if (st && !st.answered) throw new Error(`The app's Linux did not answer the Claude Code check – it may still be starting; try again in a moment`);
   if (!st?.installed) throw new Error('Claude Code is not installed in Linux yet – Settings › Account & models › Claude Code');
   await start(phoneAgent()?.cwd || cc().cwd || '/root');
 };

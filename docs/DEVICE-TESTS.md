@@ -1,7 +1,7 @@
 # On-phone checklist (short)
 
 The automated tests (about 1,600, run on every change) cover the app's logic and screens with stand-ins for Android
-and Claude Code. This list is only what a real phone can show. **40 steps in 6 sittings, about 10 minutes each** –
+and Claude Code. This list is only what a real phone can show. **41 steps in 6 sittings, about 10 minutes each** –
 do them in any order, one sitting at a time. For anything that fails, send the step number (e.g. "C4") and what you
 saw, with a screenshot or the log if there is one.
 
@@ -35,6 +35,10 @@ the decisions point there). You do not need to go through it.
 6. Side menu: one usage card – OpenCode Go rows, a dashed line, then Claude Code's 5-hour and Weekly rows.
 7. Settings › Tools & agent › Helper model → Claude Code · Sonnet; type `/polish i has went to shop` and send: the
    box gets the corrected text after a few seconds.
+8. Open a Claude Code chat: the background notice shows while it is the open chat (Android would otherwise stop the
+   app's Linux in the background, and with it every open session). Switch away for a minute, come back and send a
+   message: it answers at once – no "picking up the earlier session…" first, the chat's session was picked up while
+   you read.
 
 ## C. Phone tools (in a normal chat with tools on)
 1. "Where am I?" (approximate): answers in about a second if a map app got a location recently.

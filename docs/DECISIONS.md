@@ -647,3 +647,223 @@ The app used to keep the longer card, a rule made for Chub's short stub card (".
 - **Last sent:** what the app actually handed Claude Code. A new session shows its starting prompt (for a roleplay, the character's) plus the message with its roleplay context. A running session shows the message only, with a note that the session keeps its starting prompt. The label is the Claude Code model, e.g. "Claude Code · Default – Opus 4.8".
 - **Next reply:** the prompt a session starts with, and the context that goes with your next message.
 - **Fixed along the way (from 239):** a reply that has just finished no longer waits behind a slowed-down redraw already queued. It is drawn at once, so a finished reply never shows its "starting…" line for a moment after it ended.
+
+242. **🩺 Timings also measures typing (owner: a screenshot of letters showing up about a second after they were typed, in a long Claude Code chat).** On a long chat (90 messages, ~45K tokens) in a browser slowed 4× to roughly phone speed, each keystroke costs about 30 ms. That is a few ms of the app's code and a few ms of layout and drawing, so the lag could not be reproduced here. With Settings › Data › "🩺 Show timings after each send and while typing" on, the first keys after a pause now start a 6-second trace. Its report lists:
+- **Slow keys and taps:** each one that took longer than a frame, with how long it waited before the app got to it and when it reached the screen.
+- **Slow frames:** each frame over 100 ms (Long Animation Frames), with the code that ran in it: what started it (a timer, an event, a message from a worker), its function, its place in the file, and its time, forced layout included.
+Older WebViews without that API still get the freeze and long-task lists.
+
+243. **Looking for what else makes the app slow (owner: "Check if there are others that can make the app slow").** Measured in a browser slowed 4× to about phone speed.
+- **Doing nothing for 60 s** in a long Claude Code chat, with 40 other chats: 0.04 s of script, no Linux commands, two long-polls to the bridge (each waits up to 25 s, so no busy loop).
+  - The jobs bar set `hidden` every 1.5 s even when unchanged, a change to the page each time (40 a minute). It now changes only when there is something to change.
+- **Common actions:** opening a 200-message chat 39 ms, the side menu with 60 chats 45 ms, Settings 116 ms, the model picker 87 ms, app start 1.3 s.
+- **Not reproduced: the typing lag on the phone.** One cause this test cannot show: Claude Code runs on the phone itself, in Linux under proot, which stops at every system call, so it can take the CPU the keyboard and the screen need.
+  - The typing report (242) now ends with a verdict: either mostly the app's own code, or the app's code ran fast and the time went elsewhere.
+  - When Linux is already running, it also lists the busiest Linux programs over one second, from /proc, two looks 1 s apart. It starts nothing new.
+- **Typing traces now start on the first key after a 2-second pause,** never while one is running.
+
+244. **Typing froze after Claude Code replies: the chat's folder was saved whole, even when nothing in it had changed (owner's 🩺 typing report: a key waited 1.8 s; a 1851 ms frame from a setTimeout and a 337 ms one after a database read).** After every Claude Code reply, and after every Chronicle tool it used, the chat's 📁 folder is compared with its folder in Linux (syncWork). The comparison then always saved the folder: 300 ms later, a summary walked every file and every file's bytes were copied into the database, on the thread that draws the screen and takes the keyboard. With a few MB of files that was the freeze.
+- **Saved only when the comparison changed something:** a file copied or deleted on either side, a changed record of what each side holds, the list of folders left in Linux, or app copies of node_modules/.git that were dropped. The result says whether it was saved (`saved`).
+- **A save that is needed waits while you type:** until 1.5 s after the last key, at most 15 s.
+- **Still to do if a big folder that really changes is still slow:** store each file on its own, so that a save writes only what changed.
+
+245. **🩺 Timing history instead of a box over the chat (owner: "The show timings cover most of the screen so I couldn't test it well. Add a timing history").**
+- **Every report is kept** on the phone (localStorage, the newest 30), with a one-line summary: how long the worst key or tap waited, the longest freeze, and whether the time was the app's own code. A send with nothing slow says when the message was on screen.
+- **Nothing covers the chat.** A report that found something slow says so in a short toast ("🩺 Saved: … – Settings › Data › Timing history"). Otherwise nothing is shown.
+- **Settings › Data › 🩺 Timing history** lists them newest first, the newest open. Tap one for the full report. Copy one, Copy all, or Clear.
+
+246. **🩺 Switching chats is its own entry (owner: "It says while typing for all. Most of these are switching sessions").** The owner's history also showed the typing fix (244) working: in every trace, keys reached the screen in 24–32 ms, where one had waited 1.8 s.
+- **Opening a chat starts a trace** ("Opening “<title>”", 4 s) that replaces a typing trace still running. It marks each step: header and buttons, messages drawn (with their number), chat list drawn, chat opened, …and on screen. The busiest Linux programs are listed too. The summary line says when the chat was on screen.
+- **Only your own key presses start a typing trace.** An `input` event the app makes itself (a snippet, a restored draft) does not.
+- **The Linux "load:" line is left out when Android does not allow reading it.** It was printed empty.
+
+247. **🩺 Slow frames say where their timer or database read was started (owner: typing lag again – a 1403 ms frame named only "TimerHandler:setTimeout", after a 194 ms database read).** The browser names no code for a timer when the code waited on it first (`await` a sleep) and did its work after. The folder save from 244 waits while you type, so it is probably not that.
+- **While 🩺 is on, each timer and each database request notes the code that started it:** the function's name, and a few frames of the stack where `setTimeout` / `setInterval` was called, or where the database request was made, with the store and the mode.
+- **A slow frame is matched to that note** by when its callback began, and the report prints "started from: …". The positions are in the build's minified files, which are kept for each build.
+- **Off, nothing is noted.** The timers are wrapped once and pass straight through. The trace's own timers (its heartbeat) are never noted.
+
+248. **Claude Code update notice (owner: "our claude code has no auto updater?", then "update notice would be nice").** Claude Code's own auto-updater stays off: an update cut short under proot left no `claude` at all. The app now says when a newer version is out. Updating stays the card's button: the same install, latest version, checked that `claude --version` runs.
+- **When Claude Code's status is read** (a Claude Code chat starting it, the model picker, the card), the app asks the npm registry for `@anthropic-ai/claude-code` latest. It asks at most about once a day (20 h), with the app's own HTTP; nothing runs in Linux. Offline or with no answer, it keeps the last answer and asks again next time.
+- **A newer version than the installed one:**
+  - The card says "⬆ Update available: X (you have Y)" and its button reads "Update to X".
+  - A toast says it once per new version: "Claude Code X is out (you have Y) – Settings › Account & models › Claude Code in Linux › Update".
+- **Tests never ask the real registry:** the shared fixture answers 404 unless a test sets its own.
+
+249. **📎 › Video or big file (owner: "the 10 MB. Is this a hard limit?", then "I am showing an AI a video I recorded … The video file is 150mb").** The 10 MB limit of 📎 Attach is a choice, not a wall. An attachment is read whole into the WebView, a PDF is turned into text there, and the file is kept in the chat's folder in the app's database, where every save copies it (244). It stays for attachments. A recorded video (229) already went straight into the chat's Linux folder; a picked one could not.
+- **The 📎 menu has "Video or big file (any size)".** Android's file picker, then the file is streamed in 1 MB pieces into the chat's folder in the app's shell storage (`work/<chat>/uploads/`, `FolderPlugin.pickIntoChat`), never through the app's memory. A name already there gets " (2)", " (3)"… Progress is shown as a toast.
+- **The message carries a note, not the file:** where it is (uploads/<name>, /workspace/uploads/<name> in the shell, Claude Code's working folder). For a video it also says how to look at it: ffprobe, ffmpeg frames or audio, installing ffmpeg if it is missing.
+- **A file this big stays in Linux only:** over the 32 MB mirror limit, it is never copied into the app's database.
+- **A file over 10 MB picked with the usual Attach** is refused with where to put it instead.
+
+250. **Claude Code gets the creator tools (owner: a Claude Code chat said "save_persona, save_character, save_lorebook don't exist in this session … If you turn them on for this chat in Chronicle, I can add it straight to the app"; "Is this true?" – "yes").** It was true, except that no switch could turn them on. The Chronicle MCP server offers Claude Code a fixed list (CC_TOOLS), and `ccEnabled` set `creator: false`. Personas were left off when the server was made (166), as a cautious first cut, not for a technical reason.
+- **Added to the list:** list_personas, read_persona, save_persona, save_character, edit_persona, save_lorebook, edit_lorebook, read_lorebook, shortcuts. They follow the chat's creator switch (Settings › Tools & agent › Create…, the persona's toolset).
+- **Each save asks the user first, as for any model.** The approval sheet shows what is added, and Claude Code waits for the answer; Settings › Permissions applies too.
+- **`image` takes a picture the user sent in the chat,** as for other models. The files Claude Code wrote are synced into the chat's folder before every tool call.
+- **Not added: manage_mcp.** Claude Code's server list is part of its session, so changing it from inside would start a new session.
+- **Found while testing this (a fix to 239):** a streaming reply that had just been drawn whole (not patched) did not record its parts as built, so the next update replaced every tool card once. The parts are now recorded before the icons change them. The redraw test had failed now and then under load because of it.
+
+251. **🩺 A Claude Code reply, step by step (owner: two Claude Code chats messaged right after opening the app – one started a new session for the new tools, the roleplay "waiting on Claude Code" – about two minutes until both answered; "using claude code directly in linux it is fast").** Before Claude Code sees a message, the app:
+  1. starts the bridge and Claude Code if they are not running (after an app restart its Linux starts empty);
+  2. finds the chat's folder;
+  3. connects;
+  4. copies the skills (once per app run);
+  5. syncs the chat's files;
+  6. reopens the chat's session, or starts a new one with the chat so far;
+  7. sets the model and effort;
+  8. sends.
+
+  Several of these run in Linux under proot, and both chats did them at once on one phone. Claude Code in the terminal is one process that is already running, with none of this before it. Which step took the time cannot be told from here.
+- **With 🩺 Timings on, every Claude Code reply adds an entry to the Timing history:** each step with its time since the start and its own duration, when Claude Code's first words came (and how long after sending), the end, and how many other Claude Code replies ran at the same time.
+- **The summary line** gives the first words' time and the slowest step, counting Claude Code's own wait for its first words as a step.
+- **One cause of this is known:** the new tools (250) changed Claude Code's tool list, which is part of what a session is started with, so that chat started a new session with the whole chat as context. It happens once.
+
+252. **Claude Code chats started over too often, and then with too little of the chat (owner: screenshots – Persona Maker "A new Claude Code session: this chat's persona or its prompt changed" then 4 minutes of quiet; the roleplay Blair "the chat changed since Claude Code last saw it… starting a new session with the chat so far"; "the response on the rp side is bad. It was previously good"; "unusable due to how slow it is when continuing a chat").**
+- **A reply stopped before it reached Claude Code no longer counts as the chat changing.** You tap Stop, or a step such as starting Claude Code times out. Its placeholder reply and the message it answered are marked unsent and left out of the fingerprint the session is checked against. That message goes with your next one ("[Earlier message of mine that did not reach you …]"), once, and in a new session it is part of the chat so far. Before, every such stop threw away the session at the next message.
+- **A new session gets much more of the chat:** up to ~250,000 characters, the newest kept, where it was 12,000. A long roleplay had been continued from a few pages of its story in one block. Roleplays name the speakers (the user's persona, the character) instead of User/Assistant.
+- **"Persona or prompt changed" in Persona Maker was the new creator tools (250):** their names are part of the prompt Claude Code starts with. It happens once per chat.
+- **🩺 Timing entries for Claude Code replies (251) are written when the reply ends,** including when it is stopped or fails. A reply still running has none yet.
+
+253. **Retry (and editing your last message) forks the Claude Code session instead of starting over (owner: "I was the one who regenerate the rp chat because the reply was so bad").** A retry counted as "the chat changed", so the session was thrown away. The new one got a copy of the chat as one block of text, cut to 12,000 characters before 252. Each regenerate gave Claude Code less of the story.
+- **The ACP way, as claude-agent-acp 0.112 offers it.** The app says it supports session cursors (`clientCapabilities.session.cursors`), and Claude Code then announces a cursor before each prompt it stores (`cursor_update` with the fork capability). The app keeps it on the user message, with the fingerprint of the chat before that message.
+- **When only that last message's turn changed** (its reply asked again or swiped, the message edited): the chat before it is as it was, and the message has a cursor. The app calls `session/fork` at that cursor, closes the old session, and sends the message into the copy. The story goes on as real turns.
+- **Otherwise, as before:** a new session with the chat so far. That covers an older message changed, the first message (it has no cursor), an adapter without fork or cursors, and a fork that fails.
+- **Not used: `_session/rewind`.** The adapter offers it only to Anthropic's own client, and the app does not pass itself off as that.
+- **Tests:** the fake agent announces cursors to a client that declares them and answers session/fork with the history before the cursor.
+
+254. **Review of a blind test (another model's ten commits) and a blind code review by a second model; Claude Code reliability and speed (owner: "Check out the new push", "try doing a blind check … where it doesn't read the decision file", "Start with what you recommend").** The ten commits are kept, with the parts below fixed. Their good changes:
+  - a permission question no longer holds up every chat's stream;
+  - a question only goes to the chat that owns its session;
+  - a deleted chat's handle goes with it;
+  - the reply is rebuilt once per burst of chunks;
+  - localPath runs off the plugin thread;
+  - a busy Linux no longer reads as not installed;
+  - a chat's dead session is picked up when it is shown;
+  - "Not installed yet." no longer shows for an installed Claude Code (a slip of 248).
+- **The bridge read Claude Code's output one byte per system call.** The pipe is unbuffered (bufsize=0, for stdin), and a raw readline reads byte by byte: 506 reads for a 401-byte line, each one trapped by proot on the phone. It now reads through a 64 KB buffer.
+- **A new connection to a bridge that had dropped old events was told "reset", closed, and the next one again.** That lasted until the bridge was restarted.
+  - `/health` gives the bridge's current end and its run id. A new client starts reading there, so it is never handed earlier clients' events (old answers, old permission questions).
+  - A reader really behind, or ahead (another run), is told to reset. Every answer names the run, and a client that sees another run fails with "the bridge was restarted".
+  - An older bridge says nothing, and the client starts from 0 as before.
+- **A turn stopped before it reached Claude Code costs no new session again (252).** The ten commits had made the fingerprint count the unsent message, so the next one found the chat "changed". The fingerprint leaves out every message that never reached the session.
+- **A message is "sent" once the bridge has taken it.** Before, it was when Claude Code's turn ended, so an error mid-turn marked a message Claude Code had seen as unsent, and it was sent twice. The chat-before fingerprint used for a fork is taken then too. The POST timeout is 45 s; it was 15.
+- **Before Claude Code is restarted for not answering (2 tries), Linux is asked whether the bridge is alive.** Alive: up to 12 s more. Still silent with other Claude Code replies running: only this send fails ("too busy … try again when the other chat's reply is done"), and they go on. A restart ends every session.
+- **A send waits for a pick-up of its session already started when the chat was shown,** instead of a second session/load beside it.
+- **The end of a Claude Code reply no longer waits on bringing its files into the chat.** That sync runs after the reply is done, with a 3-minute limit; a stuck one is logged. Before, the reply stayed "writing" and Stop did nothing.
+- **The answer to a permission question is retried (4 tries).** One that never arrives is said, in the error log and a toast, instead of the agent waiting for good.
+- **A non-JSON answer from /events (a captive portal's page) is waited on like a bridge that does not answer,** not polled back to back.
+- **A queued message that drains gives the box back as soon as it is in the chat.** Before, what you typed and attached during its (Claude Code) reply was put back to the old draft when the reply ended, and the drain flag stayed set the whole time.
+
+255. **A second Retry went back to a new session (owner: "The first regeneration it worked, it gone back to the last message. The second regenerate, new session now").** claude-agent-acp anchors a live prompt's cursor after the last thing it has shown the client. A forked session, or one resumed without a replay, has shown nothing, so its first prompt gets no cursor. The re-sent message's cursor had been cleared when it was sent, so the next Retry had nothing to fork from.
+- **The cursor is kept with the session it belongs to (`acpCursorSid`)** until a turn announces a new one. A Retry after a fork forks the original session again at the same point. That session is closed, but the adapter forks from its stored history.
+- **The fake agent now announces no cursor for the first prompt of a forked session,** as the adapter, and the e2e test retries twice.
+
+256. **Blind code review, build 2 (owner: "go ahead"): saves that fail, a double tap, a stuck Claude Code job, another chat's usage, file writes that lose a file, keys outside the keystore, and the streaming redraw.** Each one below has a test that fails without the fix.
+- **A save that the browser aborts (the phone out of storage) is said, not lost in silence.** IndexedDB ends a full transaction with `abort`, not `error`, and the save's promise never settled. It now fails with "is the phone out of storage?", and a chat or workspace save that fails shows "⚠️ Could not save your changes: …". A chat's save no longer throws on to the caller.
+- **A double tap on Send sends once.** With an attachment, the second tap got in while the first was still reading the file, and both sent. A send under way now holds the button, and a send whose chat was switched away before it was put in says "Not sent: you switched chats" rather than landing in the other chat.
+- **A Claude Code job (ask_model in a chat with Claude Code) that never answers ends after 5 minutes** with a timeout error; before, it kept the job "running" for good.
+- **Tool calls that touch no files no longer bring the workspace in and out of Linux** (two syncs per call, before and after).
+- **Token usage goes to the chat that ran the reply.** With two replies running, the one in the background wrote its usage and context chip into the chat on screen.
+- **Writing a file in Linux no longer deletes it first.** The new file is renamed over the old one; only when that fails (a folder in the way) is the old one removed. Before, a failure between the two steps lost the file.
+- **A PC agent's secret, an MCP server's sign-in (access and refresh token) and a phone-run MCP server's bridge secret are kept in the Android Keystore** with the other keys, not in the plain settings. Older settings that still hold them are moved on the next start.
+- **While a reply streams, its earlier rounds' text and finished tool cards are built once and copied after that.** Before, every update (about ten a second) ran the markdown and code colouring again for the whole reply. They are kept per message by place and checked against what they were built from: a Claude Code reply's rounds are new objects on every update. A finished reply is built fresh.
+
+257. **Going back further than the last reply in a Claude Code chat (owner: "it can regenerate one new reply. Can it be applied to past replies? the ai reply and my reply?").** Each of your messages keeps the point in the session just before it (253, 255), so this needs no new mechanism.
+- **Retry on an older reply** already forked there: the later messages go to the old version (swipe ‹), so the message that reply answered is the last one again, with its point. It now has a test.
+- **Editing a message of yours (an older one, or the last) started a new session.** The edit makes a new message, and the point was not carried over to it. It is now: the chat before the message is the same, so the edited message forks the session there, with the turns before it. The later turns stay with the old version.
+- **Not covered: editing the text of Claude Code's own reply.** The session cannot be told it said something else, so the next message still starts a new session with the chat as text.
+
+258. **A blind performance review at scale, round A (owner: "Make a blind review for this… many files in a workspace of multiple chats, linux has many files, lots of agent chats 100+, agent chats with many context, some folders with chats inside… switch between pages, typing, concurrent sessions"; then "Do your recommendations… do all rounds").**
+- **The review.** Three reviewers who did not read this file. One drove the built app with its CPU slowed four times: 164 chats (68 MB), long agent and Claude Code chats, folders, 3,200 workspace files, a Linux of 3,000 files, and four replies streaming at once. Two read the code for files and for the interface at that scale.
+- **What held up:** typing when idle stays at 24–29 ms in any chat; background replies keep the screen 5% busy; nothing grows over 100+ chat switches.
+- **A long Claude Code turn froze the screen for 3–5 s per update.** After each update every tool output box had its scroll position read and set back, also inside folded cards, and each one made the browser lay out the hidden output. Now only boxes on view that you scrolled are kept, matched by their card.
+- **The streaming cache (256) compared too much.** A card's output is no longer turned into text, and a "N steps" box is no longer read back as HTML on every update: it is told apart by its cards' build numbers.
+- **Opening a chat took 0.55–0.97 s on a long one:**
+  - The list was drawn two or three times; it is drawn once now, at the end.
+  - A date formatter was made per row and per message time; there is one per kind now.
+  - A folder opens and shuts by adding or removing its own rows.
+- **Building a prompt went over every old tool result again on every request and every chat opened.** Each trimmed result is kept, keyed by its text. A call's signature and file changes are worked out once per call.
+- **The request was hashed whole for the cache comparison (199).** A long message's text is now hashed once. The timing tool's label, which turned the whole prompt into text, is only made while a timing runs. The prompt inspector keeps the newest 24 chats' prompts, not one per chat used.
+- **A reply being written is no longer saved with its whole chat every 8 s.** The chat is saved whole once per run, then only the reply, as a record of its own. On the next start a reply the app did not live to save with its chat is put back into it, marked cut off as before (172), and the record goes once the chat is saved after its run.
+- **Settings › Data › Storage froze for about 3 s.** It now sizes chats by walking them (no text made, a few at a time), and files from the workspace index, instead of reading every chat and every file.
+- **Searches:**
+  - The drawer search keeps each message's lower-case text instead of making it again for every message on each key.
+  - A file search in a chat shows the first 200 matches.
+  - A thumbnail's picture is made when it comes near the screen.
+- **Pictures shown in the app kept a full copy of their file for the whole session.** The newest 150 addresses are kept; older ones are let go.
+- **Smart memory's background pass went over every message of every chat every 30 s**, and read every chat's index, with nothing to do. A chat whose index is complete is passed over until it changes, and each message's indexed text and key are worked out once.
+- **Left for the next rounds:** a workspace saved as one record, two folder walks per tool call, phone-folder listing, build folders copied out of Linux (round B); all chats loaded at start (round C).
+
+259. **The blind review at scale, round B: chat files, Linux and phone folders.**
+- **A chat's workspace was one database record holding every file's bytes, written whole after each change.** That was the whole chat's files (and up to 60 MB of undo copies) once per write burst, per running chat, on the screen's thread.
+  - Now each file is its own record, keyed by chat and path, and the undo copies (checkpoints) are one more record.
+  - A save writes the files that changed since the last save (a file is replaced, never edited in place, so it is told apart by the object), the removed ones, the small record, and the checkpoints only when they changed.
+  - A workspace saved the old way is read as it is and saved apart from its first save on; a backup, a fork and a restore write it whole as before.
+- **Every workspace opened stayed in memory for the whole session, twice.** The newest six used are kept. One on screen, running, saving or in the Python sandbox is never let go; a workspace let go is read again when it is needed.
+- **Each sync with Linux walked the chat's folder twice:** once natively for the modes, then from JavaScript one call per folder. The native walk now gives each file's size and time too, the folders left out and whether it stopped early, so a listing is one call. An older native build is walked as before.
+- **Caches a tool makes in the chat's folder now stay in Linux,** like `node_modules` and `.git`: `.venv`, `venv`, `__pycache__`, `.next`, `.cache`, `.gradle`, `.tox`, `.mypy_cache`, `.pytest_cache`, `target`. `dist` and `build` are still brought in: people open what they build.
+- **Listing a linked phone folder asked Android five or six times per file, and found each path by listing and naming every sibling on the way.**
+  - It ran on the one thread every plugin call shares, so a big folder held up every chat's file and shell calls.
+  - It now runs on its own thread, with one query per folder that gives every child's name, type, size and time.
+  - A provider that does not answer that query is listed the old way.
+- **Tests:**
+  - IndexedDB is at version 4 (the file records), so tests open it without a version.
+  - The test bridges a killed run leaves behind now go before a run: a test whose port was still taken sat on "starting Claude Code…" until it timed out, which is what made ccretry look flaky.
+- **Not tested on a phone:** the folder query (no Android device here; it compiles, and the old way is the fallback), and the native walk's sizes and times (unit-tested against a stand-in).
+
+260. **The blind review at scale, round C: chats read at start without their messages.** At start every chat was read whole, every message and tool output of every chat, in one go: 2.2 s to start at 164 chats (68 MB), one task of about a second, and 3.8–6 s at twice that (measured with the CPU slowed four times).
+- **A chat's messages are now a record of their own,** keyed by the chat's id. Its record keeps the rest: title, times, settings, schedules.
+- **At start only the records are read,** so the list shows at once. A chat's messages are read when it is opened (or its menu is), and the others a chat at a time while the app is idle, newest first.
+- **A chat whose messages are not read yet** reads as an empty list that cannot be changed, so code that tries fails at once instead of losing anything. Saving it writes only its record (a pin, a rename, a schedule), and its stored messages stay as they were.
+- **What needs other chats' messages waits for them:**
+  - the search across chats (it searches what it has, and again when all are read), the agent's chat search and chat reading, and the Storage page;
+  - scheduled messages, resumed replies, writing first, and smart memory's index all start once every chat is read;
+  - a quiet task, a recipe and a notification reply read their chat first.
+- **Older chats, and what a closed reply leaves behind:**
+  - A chat saved by an earlier version (messages in its record) is read whole as before, and saved apart in the background.
+  - A reply saved on its own while it ran (258) and the "cut off" marking (172) are applied when the chat's messages are read.
+- **Memory:** every chat's messages are still in memory once read, but no longer all at once at start. Only the start-up freeze is fixed; keeping chats out of memory would need the code that reads other chats' messages to wait for them everywhere, which is too much to change safely in one go.
+- **Tests:** a helper gives a chat as saved, with its messages, for the tests that read the database.
+
+261. **An AI tool for roleplay presets (owner: "ai tool to see roleplay presets, edit them, create new ones, remove").** `roleplay_presets` is a creator tool: in the creator group, for Claude Code too (250). Its actions:
+- **list:** the presets, with Standard and which one is the default.
+- **read:** a preset's fields, and which it leaves to Standard. "Standard" reads the Roleplay page's own settings.
+- **create:** a new one as a copy of Standard (the default), another preset or one of the starters, with fields set or edited, and optionally made the default.
+- **edit:**
+  - set whole fields (name, model, effort, samplers, the prompts, the author's note and its depth and role, prefill, impersonate, names in front);
+  - make exact text edits inside a prompt, as edit_persona does (a field the preset does not set yet is edited from Standard's text);
+  - clear a field with "", so it follows Standard again;
+  - make it the default, or stop it being the default.
+- **delete:** chats that used it go back to the default.
+- **Checks:** create, edit and delete are asked first, and are blocked in plan mode like other writes. Values are checked:
+  - a sampler must be within its range;
+  - an unknown field says which fields there are;
+  - text that is not found, or found more than once, says so;
+  - a name two presets share asks for the id.
+- **Standard is read but not changed here:** it is the Roleplay page's own settings.
+- The logic is plain functions over the settings (planPresetChange), unit-tested; the app asks you, then saves the list and refreshes the presets page and the chat's preset chip.
+
+262. **The 📎 menu: one item for any file, no prompt tools, and back after the camera (owner: "Remove here the prompt test and inspect prompt. You should combine video or big file to attach a file. When pressing take a photo or record a video the back button exits the app").**
+- **Prompt test and Inspect the prompt are no longer in the 📎 menu.** They stay in the chat's ⋮ menu.
+- **"Video or big file (any size)" is part of "Attach a file or image".** On the phone that item opens Android's own picker, and several files can be picked at once:
+  - A file up to the 10 MB attachment limit comes back to the app and is attached as before; a picture stays a picture.
+  - A bigger one (a video, a big archive) is copied by Android into the chat's folder in Linux, a megabyte at a time and never through the app's memory, with its progress (249). The message says where it is.
+  - In a browser it is the browser's picker as before, and a big file is refused, saying the phone takes any size.
+- **Back after the camera:**
+  - Many camera apps (and some pickers) close as the back key goes down, and the key's release then reached Chronicle as its own back press. With nothing open to close, that put the app away, so "back" from the camera seemed to leave the app.
+  - A back press within 0.7 s of Chronicle coming back to the front is now ignored.
+- **Not tested on a phone:** the new picker (it compiles; the tests use a stand-in for it) and the back-button timing (it needs a real camera app).
+
+263. **Back from the camera still left the app (owner: "camera and video still doesn't work with back button. The camera has a small X button so that works to go back but video has no X button").** 262 guessed wrong. A back press that closed the camera cannot reach Chronicle: Android only treats back as back in the window where the key went down.
+- **What happens:** the X closes the camera (finish) and Chronicle shows again, but back does not. That fits a camera app that answers back by sending its task to the background, to stay quick to open. It ran in Chronicle's task, so Chronicle went with it, to the home screen.
+- **The camera now runs in a task of its own** (new task, new document). Back sends only the camera away, and Android shows Chronicle again.
+- **No result comes back from a camera started that way:**
+  - When Chronicle is back in front, the photo or video is taken from the file the camera was given; an empty file is "nothing was recorded", as before.
+  - A camera app that keeps a video in its own gallery instead: the newest video since it opened is taken from the gallery. That needs "All files" access; without it, nothing is attached.
+- **The 0.7 s guard from 262 stays;** it does no harm.
+- **Not tested on a phone:** no Android device here. It compiles, and the app's camera tests use a stand-in for the camera.
+
+264. **The video camera opened as the photo camera, and no toast after a recording (owner: "remove this toast… pressing back on camera and then selecting video. It will show the camera instead of the video recorder").**
+- **Why the photo camera came back:** a camera sent to the background by its back button (263) stays alive, and a camera app that keeps one screen brought that screen back for the next request, video or not.
+- **The fix:** the camera's task is now cleared whenever Chronicle opens it, so it starts afresh with what is asked.
+- **No more toast after a recording:** "Recorded … – it is in this chat's folder" is gone. The chip in the message box already shows the video.
+- **Not tested on a phone:** the clearing of the camera's task (it compiles; the camera tests use a stand-in for it).

@@ -3,6 +3,8 @@ package dev.chronicle.app;
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.database.Cursor;
+import android.provider.DocumentsContract;
 import android.net.Uri;
 import android.util.Base64;
 import android.webkit.MimeTypeMap;
@@ -189,30 +191,32 @@ public class FolderPlugin extends Plugin {
      */
     @PluginMethod
     public void localPath(PluginCall call) {
-        JSObject r = new JSObject();
-        try {
-            android.net.Uri uri = Uri.parse(call.getString("uri", ""));
-            String docId = null;
+        new Thread(() -> {
+            JSObject r = new JSObject();
             try {
-                docId = android.provider.DocumentsContract.getTreeDocumentId(uri);
+                android.net.Uri uri = Uri.parse(call.getString("uri", ""));
+                String docId = null;
+                try {
+                    docId = android.provider.DocumentsContract.getTreeDocumentId(uri);
+                } catch (Exception ignored) {
+                }
+                String path = null;
+                if (docId != null) {
+                    int c = docId.indexOf(':');
+                    String type = c > 0 ? docId.substring(0, c) : "";
+                    String rel = c > 0 ? docId.substring(c + 1) : docId;
+                    if ("primary".equals(type)) path = new File(android.os.Environment.getExternalStorageDirectory(), rel).getPath();
+                    else if ("raw".equals(type)) path = rel;
+                    else if (!type.isEmpty()) path = "/storage/" + type + "/" + rel;
+                }
+                String sub = call.getString("path", "");
+                if (path != null && sub != null && !sub.isEmpty()) path = new File(path, sub).getPath();
+                File f = path == null ? null : new File(path);
+                if (f != null && f.isDirectory() && f.canRead() && f.list() != null && reallyReadable(call, f)) r.put("path", f.getAbsolutePath());
             } catch (Exception ignored) {
             }
-            String path = null;
-            if (docId != null) {
-                int c = docId.indexOf(':');
-                String type = c > 0 ? docId.substring(0, c) : "";
-                String rel = c > 0 ? docId.substring(c + 1) : docId;
-                if ("primary".equals(type)) path = new File(android.os.Environment.getExternalStorageDirectory(), rel).getPath();
-                else if ("raw".equals(type)) path = rel;
-                else if (!type.isEmpty()) path = "/storage/" + type + "/" + rel;
-            }
-            String sub = call.getString("path", "");
-            if (path != null && sub != null && !sub.isEmpty()) path = new File(path, sub).getPath();
-            File f = path == null ? null : new File(path);
-            if (f != null && f.isDirectory() && f.canRead() && f.list() != null && reallyReadable(call, f)) r.put("path", f.getAbsolutePath());
-        } catch (Exception ignored) {
-        }
-        call.resolve(r);
+            call.resolve(r);
+        }).start();
     }
 
     /**
@@ -305,16 +309,107 @@ public class FolderPlugin extends Plugin {
             return;
         }
         String path = call.getString("path", "");
-        DocumentFile dir = find(root, path);
-        if (dir == null || !dir.isDirectory()) {
-            call.reject("No such folder: " + path);
-            return;
+        boolean recursive = Boolean.TRUE.equals(call.getBoolean("recursive", false));
+        int max = call.getInt("max", 1000);
+        // on a thread of its own: every plugin call of the app waits on the one plugin thread, and a big folder listed
+        // there held up every other chat's file and shell calls (decision 259)
+        new Thread(() -> {
+            JSArray out = new JSArray();
+            String prefix = String.join("/", parts(path));
+            boolean fast = false;
+            try {
+                Uri tree = Uri.parse(call.getString("uri", ""));
+                String dirId = findDocId(tree, DocumentsContract.getTreeDocumentId(tree), path);
+                if (dirId == null) {
+                    call.reject("No such folder: " + path);
+                    return;
+                }
+                fast = fastEntries(tree, dirId, prefix, recursive, out, new int[]{max});
+            } catch (Exception e) {
+                fast = false;
+            }
+            if (!fast) {
+                // a provider that does not answer the one-query listing: the slower way, one entry at a time
+                out = new JSArray();
+                DocumentFile dir = find(root, path);
+                if (dir == null || !dir.isDirectory()) {
+                    call.reject("No such folder: " + path);
+                    return;
+                }
+                addEntries(dir, prefix, recursive, out, new int[]{max});
+            }
+            JSObject r = new JSObject();
+            r.put("entries", out);
+            call.resolve(r);
+        }).start();
+    }
+
+    // One query per folder gives every child's name, type, size and time together: DocumentFile asks the provider
+    // again for each of those, per entry (five or six round trips each), and findFile lists and names all siblings for
+    // every step of a path (decision 259).
+    private static final String[] COLS = {
+        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+        DocumentsContract.Document.COLUMN_MIME_TYPE,
+        DocumentsContract.Document.COLUMN_SIZE,
+        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+    };
+
+    private interface Child {
+        void on(String id, String name, boolean dir, long size, long mtime);
+    }
+
+    /** The children of a folder, one query. → false when the provider could not answer it. */
+    private boolean children(Uri tree, String docId, Child each) {
+        Uri u = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
+        try (Cursor c = getContext().getContentResolver().query(u, COLS, null, null, null)) {
+            if (c == null) return false;
+            while (c.moveToNext()) {
+                boolean dir = DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2));
+                each.on(c.getString(0), c.getString(1), dir, c.isNull(3) ? 0 : c.getLong(3), c.isNull(4) ? 0 : c.getLong(4));
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
         }
-        JSArray out = new JSArray();
-        addEntries(dir, String.join("/", parts(path)), Boolean.TRUE.equals(call.getBoolean("recursive", false)), out, new int[]{call.getInt("max", 1000)});
-        JSObject r = new JSObject();
-        r.put("entries", out);
-        call.resolve(r);
+    }
+
+    /** The document id of a folder inside the tree, by its path; null when there is none. */
+    private String findDocId(Uri tree, String rootId, String path) throws Exception {
+        String cur = rootId;
+        for (String s : parts(path)) {
+            final String[] hit = { null };
+            if (!children(tree, cur, (id, name, dir, size, mtime) -> {
+                if (hit[0] == null && dir && s.equals(name)) hit[0] = id;
+            })) throw new Exception("no listing");
+            if (hit[0] == null) return null;
+            cur = hit[0];
+        }
+        return cur;
+    }
+
+    private boolean fastEntries(Uri tree, String docId, String prefix, boolean recursive, JSArray out, int[] budget) {
+        java.util.ArrayList<String[]> dirs = new java.util.ArrayList<>();
+        boolean ok = children(tree, docId, (id, name, dir, size, mtime) -> {
+            if (budget[0] <= 0) return;
+            String n = name == null ? "?" : name;
+            String rel = prefix.isEmpty() ? n : prefix + "/" + n;
+            JSObject o = new JSObject();
+            o.put("path", rel);
+            o.put("name", n);
+            o.put("isDir", dir);
+            o.put("size", dir ? 0 : size);
+            o.put("mtime", mtime);
+            out.put(o);
+            budget[0]--;
+            if (recursive && dir) dirs.add(new String[] { id, rel });
+        });
+        if (!ok) return false;
+        for (String[] d : dirs) {
+            if (budget[0] <= 0) break;
+            if (!fastEntries(tree, d[0], d[1], true, out, budget)) return false;
+        }
+        return true;
     }
 
     @PluginMethod
@@ -570,6 +665,203 @@ public class FolderPlugin extends Plugin {
             } catch (Exception e) {
                 if (dest != null) dest.delete();
                 call.reject("Could not bring the file into Linux: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /**
+     * A file the user picks (any size: a video, an archive), streamed into a chat's folder in the app's shell storage
+     * (decision 249) – `dir` like "work/<chat>/uploads", which the chat's Linux sees as /workspace/uploads. Never
+     * through the app's memory. An existing name gets " (2)", " (3)"… Progress: "importProgress" { done, total }.
+     * → { name, size } or {} when cancelled.
+     */
+    @PluginMethod
+    public void pickIntoChat(PluginCall call) {
+        String dir = call.getString("dir", "");
+        if (!dir.startsWith("work/") || dir.contains("..")) {
+            call.reject("not a place for it");
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        String type = call.getString("type", "*/*");
+        i.setType(type == null || type.isEmpty() ? "*/*" : type);
+        startActivityForResult(call, i, "onPickedIntoChat");
+    }
+
+    @ActivityCallback
+    private void onPickedIntoChat(final PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            call.resolve(new JSObject()); // cancelled
+            return;
+        }
+        final Uri uri = result.getData().getData();
+        new Thread(() -> {
+            File dest = null;
+            try {
+                File base = new File(getContext().getFilesDir(), "shell").getCanonicalFile();
+                File dir = new File(base, call.getString("dir", "").replaceFirst("^/+", "")).getCanonicalFile();
+                if (!dir.getPath().startsWith(base.getPath() + "/work/")) throw new Exception("not a place for it");
+                if (!dir.isDirectory() && !dir.mkdirs()) throw new Exception("could not make the folder");
+                ContentResolver cr = getContext().getContentResolver();
+                long total = -1;
+                String name = "file";
+                try (android.database.Cursor c = cr.query(uri, new String[] { android.provider.OpenableColumns.SIZE, android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+                    if (c != null && c.moveToFirst()) {
+                        if (!c.isNull(0)) total = c.getLong(0);
+                        if (!c.isNull(1)) name = c.getString(1);
+                    }
+                }
+                name = name.replaceAll("[\\\\/\\x00-\\x1f]", "_").replaceAll("^\\.+", "_").trim();
+                if (name.isEmpty()) name = "file";
+                if (name.length() > 120) name = name.substring(name.length() - 120);
+                dest = new File(dir, name);
+                int dot = name.lastIndexOf('.');
+                String stem = dot > 0 ? name.substring(0, dot) : name, ext = dot > 0 ? name.substring(dot) : "";
+                for (int k = 2; dest.exists() && k < 1000; k++) dest = new File(dir, stem + " (" + k + ")" + ext);
+                long done = 0, told = 0;
+                try (InputStream in = cr.openInputStream(uri); OutputStream out = new java.io.FileOutputStream(dest)) {
+                    if (in == null) throw new Exception("could not open the file");
+                    byte[] buf = new byte[1 << 20];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                        done += n;
+                        if (done - told >= 4L << 20) {
+                            told = done;
+                            JSObject pr = new JSObject();
+                            pr.put("done", done);
+                            pr.put("total", total);
+                            notifyListeners("importProgress", pr);
+                        }
+                    }
+                }
+                JSObject r = new JSObject();
+                r.put("name", dest.getName());
+                r.put("size", done);
+                call.resolve(r);
+            } catch (Exception e) {
+                if (dest != null) dest.delete();
+                call.reject("Could not put the file in the chat's folder: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /**
+     * "Attach a file or image" (decision 262): one picker for any file, several at once. A file up to `inline` bytes comes
+     * back to the app (base64) and is attached as before; a bigger one is copied into the chat's folder in Linux (`dir`),
+     * never through the app's memory. → { files: [{ name, size, mime, data } | { name, size, mime, copied: true }] }
+     */
+    @PluginMethod
+    public void pickForChat(PluginCall call) {
+        String dir = call.getString("dir", "");
+        if (!dir.startsWith("work/") || dir.contains("..")) {
+            call.reject("not a place for it");
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(call, i, "onPickedForChat");
+    }
+
+    @ActivityCallback
+    private void onPickedForChat(final PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        Intent data = result.getData();
+        java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
+        if (result.getResultCode() == Activity.RESULT_OK && data != null) {
+            if (data.getClipData() != null) for (int k = 0; k < data.getClipData().getItemCount(); k++) uris.add(data.getClipData().getItemAt(k).getUri());
+            else if (data.getData() != null) uris.add(data.getData());
+        }
+        if (uris.isEmpty()) {
+            JSObject r = new JSObject();
+            r.put("files", new JSArray());
+            call.resolve(r); // cancelled
+            return;
+        }
+        final long inline = call.getLong("inline", 10L * 1024 * 1024);
+        new Thread(() -> {
+            JSArray out = new JSArray();
+            File dest = null;
+            try {
+                File base = new File(getContext().getFilesDir(), "shell").getCanonicalFile();
+                File dir = new File(base, call.getString("dir", "").replaceFirst("^/+", "")).getCanonicalFile();
+                if (!dir.getPath().startsWith(base.getPath() + "/work/")) throw new Exception("not a place for it");
+                ContentResolver cr = getContext().getContentResolver();
+                for (Uri uri : uris) {
+                    long total = -1;
+                    String name = "file";
+                    try (android.database.Cursor c = cr.query(uri, new String[] { android.provider.OpenableColumns.SIZE, android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+                        if (c != null && c.moveToFirst()) {
+                            if (!c.isNull(0)) total = c.getLong(0);
+                            if (!c.isNull(1)) name = c.getString(1);
+                        }
+                    }
+                    name = name.replaceAll("[\\\\/\\x00-\\x1f]", "_").replaceAll("^\\.+", "_").trim();
+                    if (name.isEmpty()) name = "file";
+                    if (name.length() > 120) name = name.substring(name.length() - 120);
+                    String mime = cr.getType(uri);
+                    JSObject o = new JSObject();
+                    o.put("mime", mime == null ? "" : mime);
+                    // small enough: its bytes, to be attached like any picked file (a picture stays a picture)
+                    if (total >= 0 && total <= inline) {
+                        ByteArrayOutputStream buf = new ByteArrayOutputStream((int) Math.max(total, 16));
+                        try (InputStream in = cr.openInputStream(uri)) {
+                            if (in == null) throw new Exception("could not open " + name);
+                            byte[] b = new byte[1 << 16];
+                            int n;
+                            while ((n = in.read(b)) > 0) {
+                                buf.write(b, 0, n);
+                                if (buf.size() > inline) break;
+                            }
+                        }
+                        if (buf.size() <= inline) {
+                            o.put("name", name);
+                            o.put("size", buf.size());
+                            o.put("data", Base64.encodeToString(buf.toByteArray(), Base64.NO_WRAP));
+                            out.put(o);
+                            continue;
+                        }
+                    }
+                    // bigger (or of unknown size): copied into the chat's folder, a megabyte at a time
+                    if (!dir.isDirectory() && !dir.mkdirs()) throw new Exception("could not make the folder");
+                    dest = new File(dir, name);
+                    int dot = name.lastIndexOf('.');
+                    String stem = dot > 0 ? name.substring(0, dot) : name, ext = dot > 0 ? name.substring(dot) : "";
+                    for (int k = 2; dest.exists() && k < 1000; k++) dest = new File(dir, stem + " (" + k + ")" + ext);
+                    long done = 0, told = 0;
+                    try (InputStream in = cr.openInputStream(uri); OutputStream os = new java.io.FileOutputStream(dest)) {
+                        if (in == null) throw new Exception("could not open " + name);
+                        byte[] b = new byte[1 << 20];
+                        int n;
+                        while ((n = in.read(b)) > 0) {
+                            os.write(b, 0, n);
+                            done += n;
+                            if (done - told >= 4L << 20) {
+                                told = done;
+                                JSObject pr = new JSObject();
+                                pr.put("done", done);
+                                pr.put("total", total);
+                                pr.put("name", name);
+                                notifyListeners("importProgress", pr);
+                            }
+                        }
+                    }
+                    o.put("name", dest.getName());
+                    o.put("size", done);
+                    o.put("copied", true);
+                    out.put(o);
+                    dest = null;
+                }
+                JSObject r = new JSObject();
+                r.put("files", out);
+                call.resolve(r);
+            } catch (Exception e) {
+                if (dest != null) dest.delete();
+                call.reject("Could not attach it: " + e.getMessage());
             }
         }).start();
     }

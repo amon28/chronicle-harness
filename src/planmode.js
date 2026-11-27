@@ -10,6 +10,7 @@ export const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'd
 const writesFor = (name, args) => {
   if (name === 'delegate') return String(args?.tools || 'none') === 'full';
   if (name === 'shortcuts') return !['list', 'read'].includes(String(args?.action || 'list'));
+  if (name === 'roleplay_presets') return !['list', 'read'].includes(String(args?.action || 'list')); // decision 261
   if (name === 'manage_mcp') return !['list', 'search', 'test'].includes(String(args?.action || 'list'));
   if (name === 'memory' || name === 'saved_tools') return !['list', 'read'].includes(String(args?.action || 'list'));
   if (name === 'manage_mod') return true;

@@ -3,7 +3,7 @@ import { test, expect } from './helpers.js';
 const idle = (app) => app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 30000 });
 const putConv = (app, conv) =>
   app.evaluate(async (conv) => {
-    await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
+    await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
   }, conv);
 const openChat = async (app, title, mode = '') => {
   await app.click('#menu-btn');
@@ -51,7 +51,7 @@ test('a chat deleted while its reply is still being written stays deleted', asyn
   await expect(app.locator('.conv-title', { hasText: 'LONGTHINK' })).toHaveCount(0);
   await app.waitForTimeout(8000); // the reply would have finished (and saved the chat) by now
   await expect(app.locator('.conv-title', { hasText: 'LONGTHINK' })).toHaveCount(0);
-  const all = await app.evaluate(() => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const g = r.result.transaction('conversations').objectStore('conversations').getAll(); g.onsuccess = () => res(g.result); }; }));
+  const all = await app.evaluate(() => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const g = globalThis.__ocmChatsReq(); g.onsuccess = () => res(g.result); }; }));
   expect(all.map((c) => c.title)).toEqual([]);
 });
 
@@ -65,7 +65,7 @@ test('"Delete all chats" while a reply is still being written: that chat stays d
   app.once('dialog', (d) => d.accept());
   await app.click('#clear-all');
   await app.waitForTimeout(8000); // the reply would have finished (and saved the chat) by now
-  const all = await app.evaluate(() => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const g = r.result.transaction('conversations').objectStore('conversations').getAll(); g.onsuccess = () => res(g.result); }; }));
+  const all = await app.evaluate(() => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const g = globalThis.__ocmChatsReq(); g.onsuccess = () => res(g.result); }; }));
   expect(all.map((c) => c.title)).toEqual([]);
   await app.click('#menu-btn');
   await expect(app.locator('.conv-title', { hasText: 'LONGTHINK' })).toHaveCount(0);

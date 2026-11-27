@@ -65,8 +65,8 @@ test.describe('notification replies', () => {
     await send(app, 'echo from the app');
     const s = await sid(app);
     const id = await app.evaluate(async () => {
-      const db = await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => res(r.result); });
-      const all = await new Promise((res) => { const q = db.transaction('conversations').objectStore('conversations').getAll(); q.onsuccess = () => res(q.result); });
+      const _db = await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => res(r.result); });
+      const all = await new Promise((res) => { const q = globalThis.__ocmChatsReq(); q.onsuccess = () => res(q.result); });
       return all[0].id;
     });
     const before = await apiCalls(request);

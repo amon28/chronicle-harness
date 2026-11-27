@@ -91,7 +91,9 @@ function render() {
   const conv = state.current;
   const jobs = conv ? runningJobs(conv.id) : [];
   const left = conv && procs.conv === conv.id ? procs.list : [];
-  bar.hidden = !jobs.length && !left.length;
+  const none = !jobs.length && !left.length;
+  if (bar.hidden !== none) bar.hidden = none; // set every 1.5 s, it was a change to the page each time (decision 243)
+  if (none && !sig) return;
   const since = Math.round((Date.now() - procs.at) / 1000);
   // only rebuild when the set changes; the clocks are updated in place
   const now = jobs.map((j) => j.id).join(',') + '|' + left.map((p) => p.pid).join(',');

@@ -9,19 +9,18 @@ import { fmtBytes } from '../files.js';
 import { buildTree, filterFiles, sorter, ago } from '../filetree.js';
 import { applyTidy, memoryBlock, newMemory, pickLearnModel, shortenMemories, tidyMemories, undoTidy, clip, isStale, GLOBAL } from '../memory.js';
 import { ensureVectors, hasTestEmbedder, loadEmbedder } from '../embed.js';
-import { onPerfReport } from '../perf.js';
 import { canUsePhoneFolder, listFolder, pickFolder, readPhoneFile, writePhoneFile, saveToDownloads, saveAsOnPhone } from '../phonefolder.js';
 import { buildPreview, previewKind, previewLabel } from '../preview.js';
 import { highlightFile } from '../filehl.js';
 import { closeInfo } from './info.js';
 import { TOOL_GROUPS } from '../toolset.js';
-import { sandbox, getWorkspace, saveWorkspace, wsPut, wsDelete, wsList, deleteWorkspace, looksText, bytesToText, cleanPath } from '../sandbox.js';
+import { sandbox, getWorkspace, saveWorkspace, wsPut, wsDelete, wsList, deleteWorkspace, looksText, bytesToText, cleanPath, onWorkspaceDropped, setWorkspaceBusy } from '../sandbox.js';
 import { anchorPopover, anySheetOpen, newChat, openDrawer, openSheet, persist, placeAbove, selectConv } from './chatlist.js';
 import { CC_MODEL, isCcModel } from '../api.js';
 import { $, copyText, hooks, renderMarkdown, currentModel, defaultPersona, el, enabledTools, isGroup, personaById, personas, pref, state, toast, toolsOn } from './core.js';
 import { KeepAlive, stopStream } from './engine.js';
 import { draft } from './personas-ui.js';
-import { IMG_EXT, closeArt, closeFind, mimeOf, openContextSheet, openHtmlPreview, setChatPersona, updateContextChip, updateHeader, wsBlobUrl } from './render.js';
+import { IMG_EXT, closeArt, closeFind, lazySrc, mimeOf, openContextSheet, openHtmlPreview, setChatPersona, updateContextChip, updateHeader, wsBlobUrl } from './render.js';
 import { openSettings, setPage, showSettingsPage } from './settings.js';
 
 // ---------- agent: tools chip & workspace files ----------
@@ -37,6 +36,10 @@ const wsMem = new (class extends Map {
 function wsCacheSync(id) {
   return wsMem.get(id);
 }
+// a workspace let go from memory (the newest few are kept, decision 259) goes from this list too; the chat on screen and
+// the ones running are never let go
+setWorkspaceBusy((id) => id === state.current?.id || state.runs.has(id));
+onWorkspaceDropped((id) => wsMem.delete(id));
 async function loadWs(id) {
   const w = await getWorkspace(id);
   wsMem.set(id, w);
@@ -116,6 +119,7 @@ async function openFiles() {
 // Folders you opened, per chat, so the sheet comes back the way you left it. A small workspace starts open;
 // a big one starts with its folders closed, so the list is a handful of rows instead of a long scroll.
 const openDirs = new Map();
+const FILE_HITS = 200;
 async function renderFiles() {
   const id = state.current.id;
   const w = await loadWs(id);
@@ -130,8 +134,7 @@ async function renderFiles() {
     const r = el('button', 'ws-row compact');
     if (IMG_EXT.test(f.path)) {
       const img = el('img', 'ws-thumb');
-      img.loading = 'lazy';
-      img.src = wsBlobUrl(w.id, f.path, w.files[f.path].data);
+      lazySrc(img, () => wsBlobUrl(w.id, f.path, w.files[f.path]?.data || new Uint8Array())); // made when it is near the screen (258)
       r.append(img);
     } else r.append(el('span', 'file-icon', (f.path.split('.').pop() || 'file').slice(0, 4).toUpperCase()));
     const info = el('div', 'file-info');
@@ -147,7 +150,11 @@ async function renderFiles() {
     const hits = filterFiles(all, q).map((f) => ({ ...f, name: f.path }));
     hits.sort(sorter(sort));
     if (!hits.length) list.append(el('p', 'hint', 'No file matches.'));
-    hits.forEach((f) => list.append(row(f, f.path)));
+    // the first 200: thousands of rows were drawn on every key (decision 258)
+    const frag = document.createDocumentFragment();
+    hits.slice(0, FILE_HITS).forEach((f) => frag.append(row(f, f.path)));
+    list.append(frag);
+    if (hits.length > FILE_HITS) list.append(el('p', 'hint', `…and ${hits.length - FILE_HITS} more – type more of the name to narrow it down`));
     return;
   }
   const tree = buildTree(all, sort);
@@ -971,9 +978,15 @@ function handleDeepLink(url) {
 }
 
 // ---------- Android back button ----------
+const BACK_AFTER_RESUME_MS = 700;
 if (Capacitor.isNativePlatform()) {
   import('@capacitor/app').then(({ App }) => {
+    // a camera app (or a file picker) that closes as the back key goes down hands the key's release to Chronicle, which
+    // then took it as its own back press and left the app (decision 262): back right after coming back is ignored
+    let resumedAt = 0;
+    App.addListener('resume', () => (resumedAt = Date.now()));
     App.addListener('backButton', async () => {
+      if (Date.now() - resumedAt < BACK_AFTER_RESUME_MS) return;
       // the assistant's browser is on screen (watching it, or a handoff): back closes that screen, nothing else
       try {
         if ((await hideBrowserView())?.hidden) return;
@@ -1088,20 +1101,6 @@ function showUpdateBanner(rel, msg) {
   bar.append(txt, go, later);
   document.body.append(bar);
 }
-// 🩺 timings report after a send (Settings › Data)
-onPerfReport((text) => {
-  document.querySelector('.perf-report')?.remove();
-  const box = el('div', 'perf-report');
-  box.append(el('pre', null, text));
-  const row = el('div', 'row gap-sm');
-  const copy = el('button', 'ghost-btn small', 'Copy');
-  copy.onclick = () => copyText(text);
-  const close = el('button', 'ghost-btn small', 'Close');
-  close.onclick = () => box.remove();
-  row.append(copy, close);
-  box.append(row);
-  document.body.append(box);
-});
 $('#update-check').onclick = () => checkForUpdate({ manual: true });
 setTimeout(() => checkForUpdate(), 4000);
 document.addEventListener('visibilitychange', () => !document.hidden && checkForUpdate()); // a build finished while the app was in the background

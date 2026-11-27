@@ -13,7 +13,7 @@ const storedStory = (app) =>
       new Promise((resolve) => {
         const q = indexedDB.open('chronicle');
         q.onsuccess = () => {
-          const g = q.result.transaction('conversations').objectStore('conversations').getAll();
+          const g = globalThis.__ocmChatsReq();
           g.onsuccess = () => resolve(g.result[0]?.story?.text || null);
         };
       }),

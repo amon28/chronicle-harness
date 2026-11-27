@@ -4,7 +4,7 @@ test.use({ appSettings: { prefs: { tools: true } } });
 
 async function seed(app) {
   await app.evaluate(async () => {
-    const put = (store, v) => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const t = r.result.transaction(store, 'readwrite'); t.objectStore(store).put(v); t.oncomplete = res; }; });
+    const put = (store, v) => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const t = r.result.transaction(store, 'readwrite'); t.objectStore(store).put(v); t.oncomplete = res; }; });
     const enc = (s) => new TextEncoder().encode(s);
     const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
     await put('conversations', { id: 'wc1', title: 'Aquarium build', createdAt: 1, updatedAt: 5, personaId: 'general', messages: [{ role: 'user', content: 'hi', at: 1 }] });

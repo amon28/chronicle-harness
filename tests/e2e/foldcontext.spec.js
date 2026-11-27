@@ -8,7 +8,7 @@ const summaryAsked = (reqs) => reqs.some((r) => /^You compress/.test(sys(r)));
 async function putConv(app, conv, mode = '') {
   await app.evaluate(async (conv) => {
     await new Promise((res) => {
-      const r = indexedDB.open('chronicle', 3);
+      const r = indexedDB.open('chronicle');
       r.onsuccess = () => {
         const tx = r.result.transaction('conversations', 'readwrite');
         tx.objectStore('conversations').put(conv);

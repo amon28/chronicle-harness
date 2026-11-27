@@ -3,9 +3,9 @@ import { test, expect } from './helpers.js';
 const idle = (app) => app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 30000 });
 const putConv = (app, conv) =>
   app.evaluate(async (conv) => {
-    await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
+    await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
   }, conv);
-const getConv = (app, id) => app.evaluate((id) => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const g = r.result.transaction('conversations').objectStore('conversations').get(id); g.onsuccess = () => res(g.result); }; }), id);
+const getConv = (app, id) => app.evaluate((id) => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const g = globalThis.__ocmChatReq(id); g.onsuccess = () => res(g.result); }; }), id);
 const openChat = async (app, title, mode = '') => {
   await app.click('#menu-btn');
   if (mode) await app.click(`.mode-tab[data-mode="${mode}"]`);
@@ -73,7 +73,7 @@ test('a message queued in a chat you left waits after its reply failed, as it do
   await openChat(app, 'Bystander'); // the reply carries on (and fails) while you are elsewhere
   // wait until the reply has failed (it is retried a few times first), then a moment for a drain
   await expect.poll(async () => {
-    const all = await app.evaluate(() => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const g = r.result.transaction('conversations').objectStore('conversations').getAll(); g.onsuccess = () => res(g.result); }; }));
+    const all = await app.evaluate(() => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const g = globalThis.__ocmChatsReq(); g.onsuccess = () => res(g.result); }; }));
     return all.some((c) => c.messages.some((m) => m.error));
   }, { timeout: 60000 }).toBe(true);
   await app.waitForTimeout(3000);

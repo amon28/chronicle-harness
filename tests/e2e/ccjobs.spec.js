@@ -62,3 +62,28 @@ test('Claude Code in the background-job lists, and /polish on it runs a session 
   await app.click('.set-item[data-page="tools"]');
   await expect(app.locator('#pref-helper')).toHaveValue('claude-code:sonnet');
 });
+
+// Decision 256: background jobs on Claude Code run one at a time – one that never answers gives up after its limit (5
+// minutes; 1.5 s here), so the next one still runs.
+test('a Claude Code background job that never answers does not hold up the next one', async ({ app }) => {
+  await app.addInitScript(() => (globalThis.__ocmCcTextLimitMs = 1500));
+  await app.addInitScript(standIn, PORT + 1);
+  await app.reload();
+  await app.waitForSelector('body[data-ready="1"]');
+  await app.click('#model-btn');
+  await expect(app.locator('#model-list .cc-model')).toHaveCount(2, { timeout: 20000 });
+  await app.evaluate(() => document.querySelectorAll('.sheet.open [data-close]').forEach((x) => x.click()));
+  await app.click('#menu-btn');
+  await app.click('#open-settings');
+  await app.click('.set-item[data-page="tools"]');
+  await app.locator('#pref-helper').selectOption('claude-code:sonnet');
+  await app.waitForTimeout(600);
+  await app.evaluate(() => document.querySelectorAll('.sheet.open [data-close]').forEach((x) => x.click()));
+  if (await app.evaluate(() => document.body.classList.contains('drawer-open'))) await app.click('#scrim');
+  await app.fill('#input', '/polish HANG this one never comes back');
+  await app.click('#send-btn');
+  await expect(app.locator('#toast')).toContainText('did not answer this background job', { timeout: 15000 });
+  await app.fill('#input', '/polish i has went to the shop');
+  await app.click('#send-btn');
+  await expect(app.locator('#input')).toHaveValue(/^CC-JOB\(model sonnet, tools \[\]\): .*i has went to the shop/, { timeout: 25000 });
+});

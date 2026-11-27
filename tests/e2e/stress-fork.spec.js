@@ -2,7 +2,7 @@ import { test, expect } from './helpers.js';
 
 const putConv = (app, conv) =>
   app.evaluate(async (conv) => {
-    await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
+    await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
   }, conv);
 
 test('a fork does not take the scheduled tasks (or the per-chat tool OKs) with it', async ({ app }) => {
@@ -14,7 +14,7 @@ test('a fork does not take the scheduled tasks (or the per-chat tool OKs) with i
   await app.locator('.conv-item', { hasText: 'Watcher' }).locator('.conv-more').click();
   await app.click('#cm-fork');
   await expect(app.locator('#toast')).toContainText('Forked');
-  const all = await app.evaluate(() => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const g = r.result.transaction('conversations').objectStore('conversations').getAll(); g.onsuccess = () => res(g.result); }; }));
+  const all = await app.evaluate(() => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const g = globalThis.__ocmChatsReq(); g.onsuccess = () => res(g.result); }; }));
   const fork = all.find((c) => c.forkOf);
   const orig = all.find((c) => c.id === 'fk1');
   expect(orig.schedules).toHaveLength(1);

@@ -4,7 +4,7 @@ const requests = async (request) => (await (await request.get(MOCK + '/__request
 const idle = (app) => app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 30000 });
 const putConv = (app, conv) =>
   app.evaluate(async (conv) => {
-    await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
+    await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
   }, conv);
 const openChat = async (app, title, mode = '') => {
   await app.click('#menu-btn');
@@ -50,7 +50,7 @@ test.describe('a preset whose model is not in the list right now', () => {
     await expect(app.locator('#rp-preset-model')).toHaveValue('gone-model-9');
     await app.fill('#pref-phi', 'edited while the model is away');
     await app.waitForTimeout(900); // the page saves itself
-    const saved = await app.evaluate(() => new Promise((res) => { const q = indexedDB.open('chronicle', 3); q.onsuccess = () => { const g = q.result.transaction('kv').objectStore('kv').get('settings'); g.onsuccess = () => res(g.result); }; }));
+    const saved = await app.evaluate(() => new Promise((res) => { const q = indexedDB.open('chronicle'); q.onsuccess = () => { const g = q.result.transaction('kv').objectStore('kv').get('settings'); g.onsuccess = () => res(g.result); }; }));
     const p = saved.rpPresets.find((x) => x.id === 'rpp_k');
     expect(p.rpPhi).toBe('edited while the model is away');
     expect(p.model).toBe('gone-model-9');

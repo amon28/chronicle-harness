@@ -19,8 +19,15 @@ describe('which Chronicle tools Claude Code gets', () => {
   it('the phone and app tools, not the ones Claude Code has itself', () => {
     const n = names(ALL);
     for (const t of ['calendar', 'contacts', 'location', 'places', 'phone_read', 'phone_write', 'phone_status', 'phone_control', 'take_photo', 'notifications', 'messages', 'browser', 'preview_page', 'memory', 'web_search', 'view_images', 'android_intent', 'search_chats']) expect(n).toContain(t);
-    for (const t of ['shell', 'shell_job', 'run_python', 'read_file', 'write_file', 'edit_file', 'grep_files', 'fetch_url', 'delegate', 'ask_user', 'schedule_task', 'run_script', 'goal', 'use_skill', 'save_mod', 'edit_persona', 'todo_write', 'doctor']) expect(n).not.toContain(t);
+    for (const t of ['shell', 'shell_job', 'run_python', 'read_file', 'write_file', 'edit_file', 'grep_files', 'fetch_url', 'delegate', 'ask_user', 'schedule_task', 'run_script', 'goal', 'use_skill', 'save_mod', 'manage_mcp', 'todo_write', 'doctor']) expect(n).not.toContain(t);
     expect(n.every((x) => CC_TOOLS.has(x))).toBe(true);
+  });
+  it('the creator tools (decision 250): personas, characters, lorebooks, shortcuts – with the chat\'s creator switch', () => {
+    const n = names(ALL);
+    for (const t of ['list_personas', 'read_persona', 'save_persona', 'save_character', 'edit_persona', 'save_lorebook', 'edit_lorebook', 'read_lorebook', 'shortcuts']) expect(n).toContain(t);
+    expect(n).not.toContain('manage_mcp'); // its server list is part of Claude Code's session
+    const off = names({ ...ALL, creator: false });
+    for (const t of ['save_persona', 'save_character', 'save_lorebook', 'shortcuts']) expect(off).not.toContain(t);
   });
   it("follows the chat's switches: tools off → none; a group off → its tools gone", () => {
     expect(names(ALL, false)).toEqual([]);

@@ -33,7 +33,7 @@ import { projectCommands, expandCommand, projectAgents, projectStyles } from '..
 import { stylePrompt } from '../outputstyles.js';
 import { rememberText, addToAgentsMd } from '../remember.js';
 import { cleanTracker, fieldList, parseTracker, trackerToVars } from '../tracker.js';
-import { canUseShell, killShell, releaseShell, runShellTool, setShellStorage } from '../shell.js';
+import { canUseShell, killShell, releaseShell, runShell, runShellTool, setShellStorage, usedShells } from '../shell.js';
 import { getJob, jobSnapshot as shellJobSnapshot, settle as settleJob, isRunning as jobRunning, killJob, jobOnShell } from '../jobs.js';
 import { changeList, agentsInstructions, asksFirst } from '../planmode.js';
 import { activePreset, presetEffort, presetModel, presetPref, presetSamplers } from '../rppresets.js';
@@ -53,7 +53,7 @@ import { runSubagent, helperToolDefs, helperMode, runsInParallel, HELPER_SYSTEM 
 import { sandbox, getWorkspace, wsPut, snapshotFiles, recordCheckpoint, undoCheckpoint, addPhoneLog, looksText, bytesToText } from '../sandbox.js';
 import { removePhoneFile, writePhoneFile } from '../phonefolder.js';
 import { pickFolder } from '../phonefolder.js';
-import { perfStart, perfMark, perfEnd } from '../perf.js';
+import { perfStart, perfMark, perfEnd, perfRunning } from '../perf.js';
 import { modHost } from './modhost.js';
 import { matchCommand, applySnippet } from '../snippets.js';
 import { expandMacros, parseExamples, injectAtDepth, DEFAULT_MAIN, RP_GUIDE, IMPERSONATE_PROMPT } from '../rp.js';
@@ -542,6 +542,7 @@ hooks.intents = Intents; // the buttons under a map (Directions, Call…) hand o
 hooks.setShellStorage = setShellStorage;
 const KeepAlive = globalThis.__ocmKeepAlive || (Capacitor.isNativePlatform() ? registerPlugin('KeepAlive') : null);
 let keepAliveOn = false;
+let ccHold = false; // a Claude Code chat is the open one: the protection is held for it too, not only for a reply
 let streamEndTimer = null;
 let streamConvId = null;
 let bgWarned = false; // this run was told its background protection is not running
@@ -559,6 +560,21 @@ document.addEventListener('visibilitychange', () => {
     })
     .catch(() => {});
 });
+/** A Claude Code chat open in the foreground holds the background protection a reply does: without it Android stops
+ * the app's Linux in the background, and with it every open Claude Code session (decision 234). The two holds do not
+ * stop each other – a reply ending does not drop what the chat still holds, and leaving the chat does not stop a reply. */
+hooks.ccKeepAlive = (on) => {
+  if (!KeepAlive || on === ccHold) return;
+  ccHold = on;
+  if (on && !keepAliveOn) {
+    keepAliveOn = true;
+    KeepAlive.start({ title: 'Claude Code is connected', text: 'Keeps going if you switch apps' }).catch(() => {});
+  } else if (!on && keepAliveOn && !state.runs.size) {
+    keepAliveOn = false;
+    bgWarned = false;
+    KeepAlive.stop().catch(() => {});
+  }
+};
 /**
  * Replies run per chat: you can leave a chat while it is still writing and ask something in another one.
  * state.runs holds the chats that are busy (the one you are looking at is also state.stream).
@@ -567,10 +583,21 @@ document.addEventListener('visibilitychange', () => {
 // that was only in memory would vanish with its tool steps – on the next start it shows what it had, marked cut off
 let runSaver = null;
 const RUN_SAVE_MS = 8000;
+// Only the reply being written is saved each time (decision 258): the whole chat once per run (with the message it
+// answers), then the reply on its own – it is put back into its chat on the next start if the app is closed before the
+// run ends and saves the chat.
+const savedWhole = new WeakSet(); // the runs whose chat has been saved whole since they started
 function saveRunning() {
-  for (const id of state.runs.keys()) {
+  for (const [id, run] of state.runs) {
     const c = state.convs.find((x) => x.id === id) || (state.current?.id === id ? state.current : null);
-    if (c) persist(c).catch(() => {});
+    if (!c) continue;
+    const at = c.messages.findLastIndex((m) => m.streaming);
+    if (at < 0 || !savedWhole.has(run)) {
+      savedWhole.add(run);
+      persist(c).catch(() => {});
+      continue;
+    }
+    hooks.saveLiveReply?.(c, at);
   }
 }
 // the periodic save waits for a moment when nothing is being drawn or typed (at most 2 s), so it doesn't land on a
@@ -614,7 +641,7 @@ function syncRuns() {
     clearTimeout(streamEndTimer);
     streamEndTimer = setTimeout(() => {
       if (state.runs.size) return;
-      if (keepAliveOn) {
+      if (keepAliveOn && !ccHold) {
         keepAliveOn = false;
         bgWarned = false;
         KeepAlive.stop().catch(() => {});
@@ -693,6 +720,8 @@ function sendFromNotification(convId, text, { fromApp = false } = {}) {
   const conv = (state.convs || []).find((c) => c.id === convId);
   const t = String(text || '').trim();
   if (!conv || !t) return;
+  // its messages first, if they are not loaded yet (decision 260)
+  if (hooks.messagesLoaded && !hooks.messagesLoaded(conv)) return void hooks.loadMessages(conv).then(() => hooks.messagesLoaded(conv) && sendFromNotification(convId, text, { fromApp }));
   const now = Date.now();
   if (state.runs.has(conv.id) || state.current === conv) {
     const q = state.queues.get(conv.id) || [];
@@ -749,6 +778,7 @@ function cancelResume(conv) {
   if (state.current === conv) rerenderLast();
 }
 function runResumes() {
+  if (!hooks.allMessagesLoaded?.()) return; // the chats are still being read (decision 260): next time
   for (const conv of dueResumes(state.convs)) {
     if (state.runs.has(conv.id)) continue;
     delete conv.resumeAt;
@@ -787,19 +817,26 @@ function calibrate(conv, messages, usage) {
 
 // ---------- prompt inspector ----------
 // The last request sent for each chat (kept in memory only), so you can see exactly what the model got.
+// the newest 24 chats' only: a long agent chat's prompt is megabytes, and one was kept for every chat used (decision 258)
 const lastRequests = new Map();
+const REQUESTS_KEPT = 24;
+const keepRequest = (id, rec) => {
+  lastRequests.delete(id);
+  lastRequests.set(id, rec);
+  while (lastRequests.size > REQUESTS_KEPT) lastRequests.delete(lastRequests.keys().next().value);
+};
 function logRequest(opts) {
   if (opts?.sessionId) {
     // where the provider's cache stopped matching, against this chat's request before (decision 199)
     const shape = requestShape(opts);
     const prev = lastRequests.get(opts.sessionId)?.shape;
-    lastRequests.set(opts.sessionId, { ...opts, at: Date.now(), shape, cache: prev ? cacheBreakText(cacheBreak(prev, shape)) : '' });
+    keepRequest(opts.sessionId, { ...opts, at: Date.now(), shape, cache: prev ? cacheBreakText(cacheBreak(prev, shape)) : '' });
   }
   return opts;
 }
 // a chat on Claude Code (or another agent on your PC) sends through its own session, not a request built here: it says
 // what it sent, and the inspector shows that – not the request this chat's preset model would have got (decision 241)
-hooks.noteAgentSent = (conv, rec) => lastRequests.set(conv.id, { ...rec, at: Date.now() });
+hooks.noteAgentSent = (conv, rec) => keepRequest(conv.id, { ...rec, at: Date.now() });
 // ---------- sampler settings (per character, overridable per chat) ----------
 const SAMPLER_FIELDS = [
   ['temperature', 'Temperature', 0, 2, 0.05],
@@ -1350,6 +1387,8 @@ async function modelJobTool(conv, name, args) {
  * phone folder's review), in this chat's workspace. The shell guard does not apply (no shell tool is offered), nor do
  * pre/post-tool hooks (they need the chat's shell). → { ok, result, images? }
  */
+/** Chronicle tools that never read or write the chat's own files: no workspace sync around them (decision 256). */
+const NO_FILE_TOOLS = new Set(['roleplay_presets', 'calendar', 'contacts', 'location', 'places', 'phone_status', 'phone_control', 'notifications', 'messages', 'memory', 'search_chats', 'read_chat', 'web_search', 'list_personas', 'read_persona', 'save_persona', 'edit_persona', 'save_lorebook', 'edit_lorebook', 'read_lorebook', 'shortcuts', 'phone_folder', 'phone_list', 'pc_list', 'pc_search', 'list_models', 'ask_model_status', 'ask_model_cancel']);
 hooks.ccRunTool = async (conv, name, args, { signal, origin = '' } = {}) => {
   const tools = hooks.ccTools(conv, { origin });
   if (!tools.some((t) => t.name === name)) {
@@ -1370,7 +1409,10 @@ hooks.ccRunTool = async (conv, name, args, { signal, origin = '' } = {}) => {
   wsMem.set(conv.id, ws);
   const mounted = !!(await hooks.ccChatMounted?.(conv));
   // the files Claude Code wrote are on disk: into the workspace first, so a preview or view_images sees them
-  if (mounted) await syncWork(ws, conv.id, { prefer: 'b' }).catch(() => {});
+  // a tool that never reads or writes the chat's files skips the two syncs around it (decision 256): each one walks the
+  // whole chat folder through the bridge to Android – twice per calendar lookup or memory note
+  const touchesFiles = !NO_FILE_TOOLS.has(name);
+  if (mounted && touchesFiles) await syncWork(ws, conv.id, { prefer: 'b' }).catch(() => {});
   const persona = chatPersona(conv);
   const phoneStage = new Map();
   const phoneLog = [];
@@ -1400,11 +1442,15 @@ hooks.ccRunTool = async (conv, name, args, { signal, origin = '' } = {}) => {
       log: phoneLog,
     },
     schedules: schedulesFor(conv),
-    chats: { list: () => (state.convs || []).filter((c) => !convIsRp(c)), semantic: pref('smartMemory') ? async (q, o) => (await hooks.semanticChats(q, o.max, o.exclude)).filter((h) => !convIsRp(state.convs.find((c) => c.id === h.id) || {})) : null },
+    chats: { ready: () => hooks.loadAllMessages?.(), list: () => (state.convs || []).filter((c) => !convIsRp(c)), semantic: pref('smartMemory') ? async (q, o) => (await hooks.semanticChats(q, o.max, o.exclude)).filter((h) => !convIsRp(state.convs.find((c) => c.id === h.id) || {})) : null },
     ask: (q, opts, sig) => hooks.askUser({ questions: Array.isArray(q) ? q : [{ question: q, options: opts }], convId: conv.id, convTitle: conv.title || 'a chat', signal: sig || signal }).then((a) => (Array.isArray(q) ? a : a[0])),
     modSearch: (q, o) => modHost.runSearchSources(q, o),
     describeImages: (imgs, question, sig) => describeImages(imgs, question, sig, conv),
-    userImage: () => null,
+    // the creator tools (decision 250): personas, characters, lorebooks, shortcuts – and a picture the user sent as the look
+    creator: hooks.creator,
+    presets: hooks.presetTool,
+    shortcuts: hooks.shortcuts,
+    userImage: (n) => [...conv.messages].reverse().flatMap((m) => (m.role === 'user' ? [...(m.images || [])].reverse() : []))[n - 1] || null,
     signal,
     personaId: persona.id,
     personaName: (id) => personaById(id)?.name || '',
@@ -1430,7 +1476,7 @@ hooks.ccRunTool = async (conv, name, args, { signal, origin = '' } = {}) => {
     const r = await hooks.reviewChanges(conv.phoneFolder, phoneStage).catch(() => null);
     if (r) res = { ...res, result: `${res.result}\n\n[The user reviewed the phone-folder changes: ${r.applied.length ? 'accepted ' + r.applied.map((x) => x.path).join(', ') : 'accepted nothing'}${r.rejected.length ? '; rejected ' + r.rejected.join(', ') : ''}]` };
   }
-  if (mounted) await syncWork(ws, conv.id, { prefer: 'a' }).catch(() => {}); // a photo or an import: where Claude Code can read it
+  if (mounted && touchesFiles) await syncWork(ws, conv.id, { prefer: 'a' }).catch(() => {}); // a photo or an import: where Claude Code can read it
   if (state.current === conv) updateFilesChip();
   if (res && res.ok === false && !blocked) logError('tool', res.result, { tool: name, conv: conv.id, title: conv.title, model: 'Claude Code' });
   if (res?.display?.spilled && typeof res.result === 'string') res = { ...res, result: ccSpillHint(res.result, mounted) };
@@ -1565,7 +1611,10 @@ function streamOnce(run, msg, opts) {
         calls = list;
       },
       onUsage(usage, opencode) {
-        if (usage && !opts.tools?.length) calibrate(state.current, opts.messages, usage);
+        // a reply streaming in another chat: its numbers are its own – not the chat on screen's (decision 256)
+        const own = run.conv || state.current;
+        const onScreen = state.current === own;
+        if (usage && !opts.tools?.length) calibrate(own, opts.messages, usage);
         const prev = msg.usage?.usage || {};
         const sum = usage
           ? {
@@ -1577,13 +1626,13 @@ function streamOnce(run, msg, opts) {
           : prev;
         if (usage) roundOut = usage.completion_tokens ?? usage.output_tokens ?? 0;
         msg.usage = { ...msg.usage, usage: sum, opencode: opencode || msg.usage?.opencode };
-        $('#usage').textContent = fmtUsage(msg.usage);
+        if (onScreen) $('#usage').textContent = fmtUsage(msg.usage);
         if (usage) {
           // tokens of the latest request (+ its reply) = how full the context window is now
           const pIn = usage.prompt_tokens ?? usage.input_tokens ?? 0;
           const pOut = usage.completion_tokens ?? usage.output_tokens ?? 0;
           if (pIn) msg.ctx = { tokens: pIn + pOut, model: opts.model, at: Date.now() };
-          updateContextChip();
+          if (onScreen) updateContextChip();
         }
       },
       onDone(reason, info) {
@@ -1763,7 +1812,7 @@ hooks.semanticChats = async (query, max = 8, exclude = null) => {
 // fill the index a little at a time while nothing else is running
 let indexing = false;
 setInterval(async () => {
-  if (indexing || !pref('smartMemory') || state.runs.size || document.hidden || !state.convs?.length) return;
+  if (indexing || !pref('smartMemory') || state.runs.size || document.hidden || !state.convs?.length || !hooks.allMessagesLoaded?.()) return;
   indexing = true;
   try {
     await indexChats(state.convs, { store: vectors, embed: await loadEmbedder(), budget: 16 });
@@ -1859,7 +1908,7 @@ async function runCompletion(personaArg = null, { first = true, alts = null, gue
   perfMark('streaming mode on');
   if (state.current === conv) setStick(true);
 
-  const run = { stopped: false };
+  const run = { stopped: false, conv }; // conv: whose reply this is – its usage goes to it, not the chat on screen (256)
   const streamObj = {
     agent,
     steer: [], // messages you sent mid-turn: they join the work at the next step
@@ -1976,7 +2025,7 @@ async function runCompletion(personaArg = null, { first = true, alts = null, gue
         tools: currentTools(),
       };
       if (modHost.hasHook('beforeRequest')) reqOpts.messages = await modHost.beforeRequest(reqOpts.messages, { model, persona: { id: persona.id, name: persona.name } }); // mods may adjust the prompt
-      perfMark(`prompt built (${reqOpts.messages.length} parts, ~${Math.round(JSON.stringify(reqOpts.messages).length / 4000)}K tokens)`);
+      perfMark(() => `prompt built (${reqOpts.messages.length} parts, ~${Math.round(JSON.stringify(reqOpts.messages).length / 4000)}K tokens)`);
       // Providers sometimes fail or answer with nothing (e.g. Chub's Cloudflare 520s): when no text has arrived
       // yet, wait a moment and try again, up to twice, before giving up.
       let r;
@@ -2174,7 +2223,7 @@ async function runCompletion(personaArg = null, { first = true, alts = null, gue
           todos: { set: (items) => { conv.todos = items; if (state.current === conv) hooks.todosChanged?.(); } },
           goal: { get: () => conv.goal || null, set: (g) => { conv.goal = g; persist(conv); if (state.current === conv) hooks.goalChanged?.(); } },
           schedules: schedulesFor(conv),
-          chats: { list: () => (state.convs || []).filter((c) => !convIsRp(c)), semantic: pref('smartMemory') ? async (q, o) => (await hooks.semanticChats(q, o.max, o.exclude)).filter((h) => !convIsRp(state.convs.find((c) => c.id === h.id) || {})) : null },
+          chats: { ready: () => hooks.loadAllMessages?.(), list: () => (state.convs || []).filter((c) => !convIsRp(c)), semantic: pref('smartMemory') ? async (q, o) => (await hooks.semanticChats(q, o.max, o.exclude)).filter((h) => !convIsRp(state.convs.find((c) => c.id === h.id) || {})) : null },
           beforeTool: modHost.hasHook('beforeTool') ? (name, args) => modHost.beforeTool(name, args) : null,
           planMode: {
             blocking: () => !!conv.planMode && conv.plan?.status !== 'approved',
@@ -2194,6 +2243,7 @@ async function runCompletion(personaArg = null, { first = true, alts = null, gue
           ask: (q, opts, signal) => hooks.askUser({ questions: Array.isArray(q) ? q : [{ question: q, options: opts }], convId: conv.id, convTitle: conv.title || 'a chat', signal }).then((a) => (Array.isArray(q) ? a : a[0])),
           modSearch: (q, o) => modHost.runSearchSources(q, o),
           creator: hooks.creator,
+          presets: hooks.presetTool,
           shortcuts: hooks.shortcuts,
           mcpManage: hooks.mcpManage,
           userImage: (n) => [...conv.messages].reverse().flatMap((m) => (m.role === 'user' ? [...(m.images || [])].reverse() : []))[n - 1] || null,
@@ -2626,6 +2676,7 @@ hooks.schedulesFor = schedulesFor;
 
 /** Every half minute: send what has come due to its chat (one that is busy or waiting for you gets it next time). */
 async function runSchedules() {
+  if (!hooks.allMessagesLoaded?.()) return; // the chats are still being read (decision 260): next time
   const now = Date.now();
   for (const conv of state.convs || []) {
     if (!conv.schedules?.length || state.runs.has(conv.id) || state.asking?.has(conv.id)) continue;
@@ -2703,6 +2754,7 @@ function releaseChat(conv, hold) {
  * no trace in the chat, no notification. Anything else stays and notifies as usual.
  */
 async function runQuietTask(conv, t) {
+  await hooks.loadMessages?.(conv); // a chat whose messages are not loaded yet (decision 260)
   const at = Date.now();
   const user = {
     role: 'user',
@@ -2749,6 +2801,7 @@ function runProactive() {
   if (!pref('proactive')) return;
   const budget = Number(pref('dailyBudgetM')) || 0;
   if (budget && todayTokens() >= budget * 1e6) return; // today's budget is spent: nobody writes first
+  if (!hooks.allMessagesLoaded?.()) return; // the chats are still being read (decision 260): next time
   const due = dueProactive(state.convs, { quiet: quietHours(), cap: Number(pref('proactiveCap')) || 0, busy: (c) => state.runs.has(c.id) || state.asking?.has(c.id) || isGroup(c) || !!c.acp || !state.settings.apiKey }); // an agent chat (Claude Code, a PC agent) never writes first through the normal model
   for (const conv of due) {
     const last = conv.messages[conv.messages.length - 1];
@@ -2851,12 +2904,25 @@ function scheduleDrain() {
     const mine = state.pending;
     renderAttachments();
     renderQueue();
-    draining = { edit: item.edit || null, fromApp: !!item.fromApp };
+    // the draft goes back as soon as send() has taken the queued message – not when its reply ends: a Claude Code reply
+    // runs for minutes, and what you typed and attached meanwhile was put back to the old draft (decision 254)
+    let restored = false;
+    const restore = () => {
+      restored = true;
+      draining = null;
+      input.value = draft.text;
+      state.pending = draft.pending;
+      renderAttachments();
+      autoGrow();
+      hooks.updateSend?.();
+    };
+    draining = { edit: item.edit || null, fromApp: !!item.fromApp, taken: restore };
     try {
       await send();
     } finally {
       draining = null;
     }
+    if (restored) return;
     // send() stopped before taking it (a toast: still reading attachments, a model that cannot see the pictures, no key…):
     // it goes back to the front of the queue and waits like a queue you stopped, instead of vanishing
     if (state.current === conv && input.value === item.text && state.pending === mine && (item.text || mine.length) && conv.messages.at(-1) === last && !state.runs.has(conv.id)) {
@@ -2881,7 +2947,22 @@ hooks.sendClaudeCommand = (name, rest = '') => {
   box.dataset.ccCmd = name;
   return send();
 };
+// a second tap on send while the first is still being got ready (reading a picture, a mod's hook, the workspace) is not a
+// second send – it pushed the message twice (decision 256). Free again once the message is in the chat.
+// Each send holds its own token: an earlier send whose reply ends later does not free a later one still being got ready.
+let sendBusy = null;
+let sendConv = null; // the chat send was pressed in: a switch while it was got ready does not put it in another chat
 async function send() {
+  if (sendBusy) return;
+  const mine = (sendBusy = {});
+  sendConv = state.current;
+  try {
+    return await sendNow(mine);
+  } finally {
+    if (sendBusy === mine) sendBusy = null;
+  }
+}
+async function sendNow(mine) {
   // a Claude Code command picked from the "/" menu (decision 173): it goes to Claude Code as it is – none of Chronicle's
   // own commands of the same name (/compact, /plan…) takes it
   const pickedCc = $('#input').dataset.ccCmd;
@@ -3115,12 +3196,20 @@ async function send() {
     versions[old.vIndex ?? 0] = { ...userVersion(old), tail: state.current.messages.slice(i + 1) };
     msg.versions = [...versions, userVersion(msg)];
     msg.vIndex = msg.versions.length - 1;
+    // the point in the Claude Code session just before this message is the same for its new wording: the edit forks
+    // the session there instead of starting a new one (decision 257) – an older message as much as the last one
+    for (const k of ['acpCursor', 'acpCursorSid', 'acpSigBefore']) if (old[k]) msg[k] = old[k];
     state.current.messages.splice(i);
     if (state.current.summary && i < state.current.summary.upto) delete state.current.summary;
     if (draining && editing?.conv === state.current && editing.index >= i) setEditing(null); // the message being edited on screen went with the old version
   }
   if (!draining) setEditing(null);
+  if (sendConv && state.current !== sendConv) {
+    toast('Not sent: you switched chats while it was being got ready – send it again', 5000);
+    return;
+  }
   state.current.messages.push(msg);
+  if (sendBusy === mine) sendBusy = null; // in the chat: the next tap is a new message (or the queue, while this reply runs)
   if (branched) renderMessages();
   else appendMessage(state.current.messages.length - 1); // just the new bubble – redrawing a long chat takes a moment
   perfMark('your message drawn');
@@ -3128,6 +3217,7 @@ async function send() {
   input.value = '';
   autoGrow();
   state.pending = [];
+  draining?.taken?.(); // a queued message is in the chat now: the box is yours again, also while the reply runs (254)
   renderAttachments();
   rememberChat(state.current.id, {}); // sent: nothing left to remember for this chat
   persist(); // the chat is copied for saving right away; the reply doesn't wait for the disk
@@ -4292,7 +4382,34 @@ function autoGrow() {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 180) + 'px';
 }
-input.addEventListener('input', () => {
+/**
+ * Which programs in the phone's Linux used the CPU over one second (decision 243): Claude Code runs there, under proot,
+ * which stops at every system call – it can take the CPU the keyboard and the screen need. Only when Linux is already
+ * running (Claude Code's bridge is up, or a chat used the shell): this starts nothing.
+ */
+async function linuxTop() {
+  if (!canUseShell() || !(hooks.ccBridgeUp?.() || usedShells.size)) return '';
+  const r = await runShell(LINUX_TOP, { id: 'perf', timeoutMs: 10000 }).catch(() => null);
+  const out = String(r?.output || '').trim();
+  return out ? `Linux, busiest programs over 1 s (100% = one CPU core):\n${out}` : '';
+}
+// two looks at every process's CPU time, 1 s apart (from /proc: a small Linux may have no ps)
+const LINUX_TOP = [
+  'S(){ for f in /proc/[0-9]*/stat; do cat "$f" 2>/dev/null && echo; done; }',
+  'a=$(S); sleep 1; b=$(S)',
+  `printf '%s\\n@@\\n%s\\n' "$a" "$b" | awk 'BEGIN{p=0} /^@@$/{p=1;next} { s=$0; l=index(s,"("); r=length(s); while(r>0 && substr(s,r,1)!=")") r--; if(l<2||r<l) next; pid=substr(s,1,l-2); c=substr(s,l+1,r-l-1); n=split(substr(s,r+2),f," "); if(n<13) next; t=f[12]+f[13]; if(!p){a[pid]=t} else {d[pid]=t-a[pid]; nm[pid]=c} } END{ for(k in d) if(d[k]>0) print d[k], k, nm[k] }' | sort -rn | head -6 | awk '{printf "  %3d%%  %s (pid %s)\\n", $1, $3, $2}'`,
+  'l=$(cut -d" " -f1-3 /proc/loadavg 2>/dev/null); [ -n "$l" ] && echo "  load: $l"', // Android may not let it be read
+].join('\n');
+
+// 🩺 Timings also measures typing (decision 242): the first keys after a pause start a 6-second trace of what held
+// the screen up while you typed
+let lastKeyAt = 0;
+hooks.linuxTop = linuxTop;
+input.addEventListener('input', (e) => {
+  const now = Date.now();
+  // only your own typing (a snippet or a restored draft puts text in too, as an event the app makes)
+  if (e.isTrusted && pref('perfTrace') && !perfRunning() && now - lastKeyAt >= 2000) perfStart('While typing (6 s)', { ms: 6000, extra: linuxTop });
+  if (e.isTrusted) lastKeyAt = now;
   autoGrow();
   updateSlash();
   clearTimeout(draftTimer);

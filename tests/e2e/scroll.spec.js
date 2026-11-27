@@ -7,7 +7,7 @@ test('long chats stay scrolled to the bottom after a reply and after Retry', asy
     const messages = [];
     for (let i = 0; i < 120; i++) messages.push(i % 2 ? { role: 'assistant', content: para(i) + '\n\n' + para(i + 1), personaId: 'general', model: 'glm-5.3', at: Date.now() } : { role: 'user', content: 'Short ' + i, at: Date.now() });
     const conv = { id: 'sc1', title: 'Scroll test', createdAt: Date.now(), updatedAt: Date.now(), personaId: 'general', messages };
-    await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const t = r.result.transaction('conversations', 'readwrite'); t.objectStore('conversations').put(conv); t.oncomplete = res; }; });
+    await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const t = r.result.transaction('conversations', 'readwrite'); t.objectStore('conversations').put(conv); t.oncomplete = res; }; });
   });
   await app.reload();
   await app.waitForSelector('body[data-ready="1"]');

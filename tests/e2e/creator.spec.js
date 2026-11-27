@@ -116,3 +116,28 @@ test('the assistant can add an MCP server after you approve; its tools are offer
   await app.evaluate(() => document.querySelector('#open-mcp').click());
   await expect(app.locator('#mcp-list')).toContainText('pics');
 });
+
+// Decision 261: the assistant makes, changes and deletes roleplay presets – after you approve
+test('the assistant can make a roleplay preset and make it the default, after you approve', async ({ app }) => {
+  await app.fill('#input', 'MAKEPRESET please');
+  await app.click('#send-btn');
+  await expect(app.locator('#ask-sheet')).toHaveClass(/open/);
+  await expect(app.locator('#ask-question')).toContainText('Make a roleplay preset “Noir”, a copy of the “Slow burn” starter');
+  await app.click('#ask-options .menu-item:has-text("Make it")');
+  await app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 20000 });
+  await expect(app.locator('.tool-card', { hasText: 'Roleplay presets' })).toContainText('Made the preset “Noir”');
+  const s = await app.evaluate(
+    () =>
+      new Promise((res) => {
+        const r = indexedDB.open('chronicle');
+        r.onsuccess = () => {
+          const q = r.result.transaction('kv').objectStore('kv').get('settings');
+          q.onsuccess = () => res(q.result);
+        };
+      }),
+  );
+  const noir = s.rpPresets.find((p) => p.name === 'Noir');
+  expect(noir.rpNote).toBe('Rain, always rain.');
+  expect(noir.rpPhi).toMatch(/Let the story breathe/);
+  expect(s.rpPresetId).toBe(noir.id);
+});

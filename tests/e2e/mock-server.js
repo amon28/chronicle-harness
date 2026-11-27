@@ -391,7 +391,25 @@ http
         }
       }
       // several tool steps, then a long answer written slowly: for the scroll position when the reply finishes
-      if (/STEPSTHENTEXT/.test(JSON.stringify(msgs.filter((x) => x.role === 'user').at(-1)?.content || ''))) {
+      // steps with words between them, then a long answer (decision 256: the earlier rounds are not rebuilt while it streams)
+      if (/STEPSWITHWORDS/.test(JSON.stringify(msgs.filter((x) => x.role === 'user').at(-1)?.content || ''))) {
+        const n = msgs.slice(msgs.map((x) => x.role).lastIndexOf('user')).filter((x) => x.role === 'tool').length;
+        if (n < 5) {
+          send({ choices: [{ delta: { content: `Looking at **part ${n}** of the folder, \`step ${n}\`.` } }] });
+          send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_sw' + n, type: 'function', function: { name: 'list_files', arguments: '{}' } }] } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+          return done();
+        }
+        for (let i = 0; i < 40; i++) {
+          send({ choices: [{ delta: { content: `Answer paragraph ${i}. ` + 'Some text that wraps over a few lines on a phone screen. '.repeat(3) + '\n\n' } }] });
+          await wait(40);
+        }
+        send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+        return done();
+      }
+      // STEPSTHENSLOW: the same, its answer written over about 8 s
+      if (/STEPSTHENTEXT|STEPSTHENSLOW/.test(JSON.stringify(msgs.filter((x) => x.role === 'user').at(-1)?.content || ''))) {
+        const gap = /STEPSTHENSLOW/.test(JSON.stringify(msgs.filter((x) => x.role === 'user').at(-1)?.content || '')) ? 200 : 40;
         const n = msgs.slice(msgs.map((x) => x.role).lastIndexOf('user')).filter((x) => x.role === 'tool').length;
         if (n < 6) {
           send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_st' + n, type: 'function', function: { name: 'list_files', arguments: '{}' } }] } }] });
@@ -400,7 +418,7 @@ http
         }
         for (let i = 0; i < 40; i++) {
           send({ choices: [{ delta: { content: `Answer paragraph ${i}. ` + 'Some text that wraps over a few lines on a phone screen. '.repeat(3) + '\n\n' } }] });
-          await wait(40);
+          await wait(gap);
         }
         send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
         return done();
@@ -510,6 +528,16 @@ http
           return done();
         }
         return say('Calendar: ' + tools[0].content.split('\n')[0]);
+      }
+      // the assistant makes a roleplay preset (decision 261)
+      if (/MAKEPRESET/.test(JSON.stringify(msgs.filter((x) => x.role === 'user').at(-1)?.content || '')) && offered(jb, 'roleplay_presets')) {
+        const tools = msgs.slice(msgs.map((x) => x.role).lastIndexOf('user')).filter((x) => x.role === 'tool');
+        if (!tools.length) {
+          send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_rpp', type: 'function', function: { name: 'roleplay_presets', arguments: JSON.stringify({ action: 'create', name: 'Noir', from: 'Slow burn', set: { rpNote: 'Rain, always rain.' }, make_default: true }) } }] } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+          return done();
+        }
+        return say('Preset: ' + tools[0].content.split('\n')[0]);
       }
       if (/VIEWPIX/.test(JSON.stringify(msgs.filter((x) => x.role === 'user').at(-1)?.content || '')) && offered(jb, 'view_images')) {
         const tools = msgs.slice(msgs.map((x) => x.role).lastIndexOf('user')).filter((x) => x.role === 'tool');

@@ -4,9 +4,9 @@ test('a backup is written as a stream, and restores back into a readable zip wit
   await send(app, 'hello backup');
   // put a big-ish workspace file in the chat so the backup has to stream more than one piece
   const result = await app.evaluate(async () => {
-    const open = () => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => res(r.result); });
+    const open = () => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => res(r.result); });
     const db = await open();
-    const convs = await new Promise((res) => { const q = db.transaction('conversations').objectStore('conversations').getAll(); q.onsuccess = () => res(q.result); });
+    const convs = await new Promise((res) => { const q = globalThis.__ocmChatsReq(); q.onsuccess = () => res(q.result); });
     const id = convs[0].id;
     const big = new Uint8Array(3 * 1024 * 1024);
     let x = 123456789;

@@ -79,6 +79,31 @@ export async function pickIntoLinux(guest, onProgress = null) {
     h?.remove?.();
   }
 }
+/** A file of any size picked on the phone, streamed into a chat's folder (dir "work/<chat>/uploads", decision 249). → { name, size } or {} */
+export const canPickIntoChat = () => typeof impl()?.pickIntoChat === 'function';
+/** Can "Attach a file or image" take any size (decision 262): the phone's picker, big files copied into the chat's folder? */
+export const canPickForChat = () => typeof impl()?.pickForChat === 'function';
+/**
+ * The phone's file picker, several at once: files up to `inline` bytes come back with their bytes (attached as usual),
+ * bigger ones are copied by Android into `dir` (the chat's folder in Linux). → [{ name, size, mime, data?: Uint8Array, copied? }]
+ */
+export async function pickForChat(dir, { inline = 10 * 1024 * 1024, onProgress = null } = {}) {
+  const h = onProgress ? await impl().addListener?.('importProgress', (e) => onProgress(e.done, e.total, e.name)) : null;
+  try {
+    const r = await impl().pickForChat({ dir, inline });
+    return (r?.files || []).map((f) => (f.data != null ? { ...f, data: b64ToBytes(f.data) } : f));
+  } finally {
+    h?.remove?.();
+  }
+}
+export async function pickIntoChat(dir, { type = '*/*', onProgress = null } = {}) {
+  const h = onProgress ? await impl().addListener?.('importProgress', (e) => onProgress(e.done, e.total)) : null;
+  try {
+    return await impl().pickIntoChat({ dir, type });
+  } finally {
+    h?.remove?.();
+  }
+}
 export const writePhoneFile = (f, path, bytes) => impl().write({ uri: f.uri, path, base64: bytesToB64(bytes) });
 /** A big file written in pieces (about 1 MB each): write(bytes) as often as you like; a failure removes the half-written file. */
 export function openPhoneWriter(f, path) {

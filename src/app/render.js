@@ -501,19 +501,24 @@ function renderMentionBar() {
   bar.append(mode);
 }
 
+// formatters made once (each toLocale…String call makes a new one: a tenth of opening a long chat, decision 258)
+const F_TIME = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+const F_DAY = new Intl.DateTimeFormat([], { month: 'short', day: 'numeric' });
+const F_DAY_Y = new Intl.DateTimeFormat([], { month: 'short', day: 'numeric', year: 'numeric' });
+const F_FULL = new Intl.DateTimeFormat([], { dateStyle: 'medium', timeStyle: 'medium' });
 function fmtTime(at) {
   const d = new Date(at);
-  const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const t = F_TIME.format(d);
   const now = new Date();
   if (d.toDateString() === now.toDateString()) return t;
   const y = new Date(now);
   y.setDate(now.getDate() - 1);
   if (d.toDateString() === y.toDateString()) return `Yesterday ${t}`;
-  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) })}, ${t}`;
+  return `${(d.getFullYear() !== now.getFullYear() ? F_DAY_Y : F_DAY).format(d)}, ${t}`;
 }
 const timeEl = (at) => {
   const t = el('span', 'msg-time', fmtTime(at));
-  t.title = new Date(at).toLocaleString();
+  t.title = F_FULL.format(new Date(at));
   return t;
 };
 
@@ -605,16 +610,15 @@ function messageNode(msg, index, reuse = null) {
     }
     // tool calls in a row (no text between them) are drawn as one folded "N steps" box once there are a few
     let run = [];
+    const cache = liveCache(msg);
     const flush = () => {
-      col.append(...toolRun(run));
+      col.append(...toolRun(run, cache));
       run = [];
     };
     (msg.rounds || []).forEach((r, ri) => {
       if (r.content?.trim()) {
         flush();
-        const t = el('div', 'md round-text');
-        t.innerHTML = renderMarkdown(r.content);
-        col.append(t);
+        col.append(roundText(r, cache, ri));
       }
       r.calls.forEach((c, ci) => run.push({ c, k: `${ri}.${ci}` }));
       if (r.auto === 'goal' || r.steer) {
@@ -872,12 +876,65 @@ const toolName = (c) => (TOOL_LABELS[c.name] || [null, c.name.startsWith('tool_'
  * whose header says how many steps, which tools (browser ×7 · python ×2 …), what is running now and what failed.
  * The pictures calls made stay visible under the box. run: [{ c, k }] (k: a stable key, for keeping the box open).
  */
-function toolRun(run) {
+// A reply still arriving is drawn again on every update (paintMessage). Its earlier rounds' text and its finished tool
+// cards do not change any more: each is built once (markdown, code colouring) and copied after that, with the HTML it was
+// built as noted, so patchStreaming does not have to read it back either (decision 256). Kept per message by place
+// (round n, call n.m) and checked against what it was built from – a Claude Code reply's rounds and calls are new objects
+// on every update. Only while it streams: a finished reply is built fresh, so a changed setting (maths, code colours) shows.
+const builtOnce = new WeakMap();
+let builtSeq = 0; // each build's own number (_v): a "N steps" box is the same as before when all its cards are (258)
+function cachedNode(cache, key, of, build) {
+  const hit = cache?.get(key);
+  if (hit && hit.of.length === of.length && hit.of.every((v, i) => v === of[i])) {
+    const n = hit.tpl.cloneNode(true);
+    n._src = hit.src;
+    n._v = hit.v;
+    return n;
+  }
+  const n = build();
+  n._v = ++builtSeq;
+  if (!cache) return n;
+  const tpl = n.cloneNode(true); // kept as built: the copy on screen gets its emoji turned into icons
+  n._src = tpl.outerHTML;
+  cache.set(key, { of, tpl, src: n._src, v: n._v });
+  return n;
+}
+// what a finished card's output is compared by: a Claude Code call's display is a new { output } on every update – its
+// text is compared; any other display is set once when the call ends, so the object itself (no copy to text, 258)
+const displayKey = (d) => {
+  if (!d) return null;
+  const k = Object.keys(d);
+  return k.length === 1 && k[0] === 'output' ? d.output : k.length ? d : null;
+};
+const liveCache = (msg) => {
+  if (!msg.streaming) return null;
+  let c = builtOnce.get(msg);
+  if (!c) builtOnce.set(msg, (c = new Map()));
+  return c;
+};
+function roundText(r, cache, ri) {
+  return cachedNode(cache, 'r' + ri, [r.content], () => {
+    const t = el('div', 'md round-text');
+    t.innerHTML = renderMarkdown(r.content);
+    return t;
+  });
+}
+const FINISHED = new Set(['done', 'error', 'cancelled']);
+function toolRun(run, cache = null) {
   if (!run.length) return [];
   const card = ({ c, k }) => {
-    const d = toolCard(c);
-    d.dataset.k = 'c' + k;
-    return d;
+    const build = () => {
+      const d = toolCard(c);
+      d.dataset.k = 'c' + k;
+      return d;
+    };
+    // a call still running or being written changes from one update to the next: built each time
+    if (!cache || !FINISHED.has(c.status)) {
+      const n = build();
+      n._v = ++builtSeq;
+      return n;
+    }
+    return cachedNode(cache, 'c' + k, [c.name, c.status, c.statusText, c.arguments, c.result, c.error, displayKey(c.display)], build);
   };
   if (run.length < GROUP_AT) return run.flatMap((x) => [card(x), callGallery(x.c)].filter(Boolean));
   const calls = run.map((x) => x.c);
@@ -908,6 +965,9 @@ function toolRun(run) {
   const body = el('div', 'tool-group-body');
   for (const x of run) body.append(card(x));
   det.append(body);
+  // while the reply streams: the box is told apart by its cards' build numbers – not by reading back its HTML (all its
+  // cards) on every update to see whether it changed (258)
+  if (cache) det._src = `g:${det.dataset.k}:${[...body.children].map((n) => n._v).join(',')}`;
   const pics = run.map((x) => callGallery(x.c)).filter(Boolean);
   return [det, ...pics];
 }
@@ -1010,11 +1070,41 @@ function toolCard(c) {
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
 const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', csv: 'text/csv', json: 'application/json', html: 'text/html', txt: 'text/plain', md: 'text/markdown', zip: 'application/zip' };
 const mimeOf = (p) => MIME[p.split('.').pop().toLowerCase()] || 'application/octet-stream';
+// a picture's address for an <img>: the newest 150 used are kept, older ones let go (each held a full copy of its file for
+// the whole session, decision 258). A picture already shown stays on screen; drawn again, it gets a new address.
 const blobUrls = new Map();
+const BLOBS_KEPT = 150;
 function wsBlobUrl(convId, path, data) {
   const k = convId + ':' + path + ':' + data.byteLength;
-  if (!blobUrls.has(k)) blobUrls.set(k, URL.createObjectURL(new Blob([data], { type: mimeOf(path) })));
-  return blobUrls.get(k);
+  let u = blobUrls.get(k);
+  if (u) blobUrls.delete(k);
+  else u = URL.createObjectURL(new Blob([data], { type: mimeOf(path) }));
+  blobUrls.set(k, u);
+  while (blobUrls.size > BLOBS_KEPT) {
+    const [old, url] = blobUrls.entries().next().value;
+    blobUrls.delete(old);
+    URL.revokeObjectURL(url);
+  }
+  return u;
+}
+/** img.src = make() once the picture comes near the screen: a long list of files makes addresses only for what you see. */
+let nearScreen = null;
+function lazySrc(img, make) {
+  if (typeof IntersectionObserver !== 'function') return void (img.src = make());
+  nearScreen ||= new IntersectionObserver(
+    (list) => {
+      for (const e of list) {
+        if (!e.isIntersecting) continue;
+        nearScreen.unobserve(e.target);
+        const m = e.target._make;
+        delete e.target._make;
+        if (m) e.target.src = m();
+      }
+    },
+    { rootMargin: '300px' },
+  );
+  img._make = make;
+  nearScreen.observe(img);
 }
 
 /** Images one tool call made or changed (run_python, saved tools, screenshots). */
@@ -1733,6 +1823,20 @@ function patchStreaming(old, node) {
   return true;
 }
 
+/** The scrollable output boxes of a message that are on view (not inside a folded card), keyed by their card and place. */
+function scrollBoxes(root) {
+  const out = [];
+  const seen = new Map();
+  for (const x of root.querySelectorAll('.tool-body pre, .tool-out')) {
+    if (x.closest('details:not([open])')) continue;
+    const card = x.closest('[data-k]')?.dataset.k || '';
+    const n = seen.get(card) || 0;
+    seen.set(card, n + 1);
+    out.push([`${card}#${n}`, x]);
+  }
+  return out;
+}
+
 function paintMessage(i) {
   const msgs = state.current.messages;
   const old = msgNode(i);
@@ -1756,7 +1860,11 @@ function paintMessage(i) {
     const atEnd = ob ? ob.scrollHeight - ob.scrollTop - ob.clientHeight < 12 : true;
     const top = ob?.scrollTop || 0;
     // other scrollable boxes (code being written, tool output): remember where each was
-    const oldBoxes = [...old.querySelectorAll('.tool-body pre, .tool-out')].map((x) => [x.scrollTop, x.scrollLeft]);
+    // only boxes you can see, and only where they were scrolled: reading or setting the scroll of a box inside a folded
+    // card makes the browser lay out its hidden output – a Claude Code turn of 70+ cards froze the screen for seconds on
+    // every update (decision 258)
+    const oldBoxes = new Map();
+    for (const [key, x] of scrollBoxes(old)) if (x.scrollTop || x.scrollLeft) oldBoxes.set(key, [x.scrollTop, x.scrollLeft]);
     // a streaming reply is updated in place when it can be; otherwise the node is replaced
     const patched = patchStreaming(old, node);
     if (!patched) {
@@ -1767,15 +1875,23 @@ function paintMessage(i) {
       const anchor = stickToBottom ? null : viewAnchor(old);
       // the finished node starts at the height it had: an off-screen reply would otherwise shrink to the 240px guess
       if (old.offsetHeight) node.style.containIntrinsicSize = `auto ${old.offsetHeight}px`;
+      // a reply still arriving: its parts are noted as built before the icons change them, so the next update keeps
+      // the ones that did not change instead of replacing them all once (decision 239)
+      if (node.classList.contains('streaming-msg')) {
+        const col = node.querySelector('.md')?.parentElement;
+        for (const c of [...node.children, ...(col ? col.children : [])]) c._src ??= c.outerHTML;
+      }
       old.replaceWith(node);
       if (anchor) holdAnchor(anchor, node);
     }
     const root = patched ? old : node;
     const nb = root.querySelector('.reasoning-body');
     if (ob && nb && (nb !== ob || atEnd)) nb.scrollTop = atEnd ? nb.scrollHeight : top;
-    root.querySelectorAll('.tool-body pre, .tool-out').forEach((x, k) => {
-      if (oldBoxes[k]) [x.scrollTop, x.scrollLeft] = oldBoxes[k];
-    });
+    if (oldBoxes.size)
+      for (const [key, x] of scrollBoxes(root)) {
+        const at = oldBoxes.get(key);
+        if (at) [x.scrollTop, x.scrollLeft] = at;
+      }
     return;
   }
   messagesEl.querySelector(':scope > .empty')?.remove();
@@ -1925,4 +2041,4 @@ $('#html-sheet').addEventListener('transitionend', () => {
   if (!$('#html-sheet').classList.contains('open')) $('#html-frame').srcdoc = '';
 });
 
-export { changesCard, repaintMessage, IMG_EXT, addGreeting, applyChatArt, closeArt, closeFind, contextNow, groupAvatar, messageNode, messagesEl, mimeOf, modelName, msgNode, openArt, openContextSheet, openFind, openHtmlPreview, appendMessage, renderMessages, rerenderLast, scrollBottom, setChatPersona, setStick, toolSubject, updateContextChip, updateHeader, wsBlobUrl };
+export { changesCard, repaintMessage, IMG_EXT, addGreeting, applyChatArt, closeArt, closeFind, contextNow, groupAvatar, messageNode, messagesEl, mimeOf, modelName, msgNode, openArt, openContextSheet, openFind, openHtmlPreview, appendMessage, renderMessages, rerenderLast, scrollBottom, setChatPersona, setStick, toolSubject, updateContextChip, updateHeader, wsBlobUrl, lazySrc };

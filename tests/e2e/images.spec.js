@@ -46,7 +46,7 @@ test.describe('two long pictures in one message', () => {
     await app.evaluate(async () => {
       const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); g.fillStyle = '#3b82f6'; g.fillRect(0, 0, w, h); return c.toDataURL('image/png'); };
       const conv = { id: 'wide1', title: 'Long pictures', createdAt: Date.now(), updatedAt: Date.now(), personaId: 'general', messages: [{ role: 'user', content: 'two long screenshots', images: [mk(500, 3200), mk(500, 3200)], at: Date.now() }, { role: 'assistant', content: 'ok', personaId: 'general', model: 'kimi-k3', at: Date.now() }] };
-      await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const t = r.result.transaction('conversations', 'readwrite'); t.objectStore('conversations').put(conv); t.oncomplete = res; }; });
+      await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const t = r.result.transaction('conversations', 'readwrite'); t.objectStore('conversations').put(conv); t.oncomplete = res; }; });
     });
     await app.reload();
     await app.waitForSelector('body[data-ready="1"]');
@@ -71,7 +71,7 @@ test.describe('older pictures', () => {
       const u = (content, imgs, paths) => ({ role: 'user', content, images: imgs, ...(paths ? { imagePaths: paths } : {}), at: t });
       const a = (content) => ({ role: 'assistant', content, personaId: 'general', model: 'kimi-k3', at: t });
       const conv = { id: 'pics3', title: 'Three pictures', createdAt: t, updatedAt: t, personaId: 'general', messages: [u('first photo', [px], ['uploads/cat.png']), a('a cat'), u('second photo', [px]), a('a dog'), u('third photo', [px, px]), a('two birds')] };
-      await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
+      await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
     });
     await app.reload();
     await app.waitForSelector('body[data-ready="1"]');

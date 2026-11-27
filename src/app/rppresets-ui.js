@@ -96,6 +96,23 @@ export function capturePreset(prefsBefore, samplersBefore) {
   p.model = model;
 }
 
+// what the roleplay_presets tool works with (decision 261): the presets, Standard's values, and saving a changed list
+hooks.presetTool = {
+  settings: () => S(),
+  standard: () => valuesOf(''),
+  models: () => state.models || [],
+  save: (list, defaultId) => {
+    hooks.flushSettings?.();
+    S().rpPresets = list;
+    S().rpPresetId = list.some((p) => p.id === defaultId) ? defaultId : '';
+    saveSettings(S());
+    if (!presetById(S(), editing)) editing = '';
+    fillPresetPage(editing);
+    hooks.updateModelUI?.();
+    hooks.updatePresetChip?.();
+  },
+};
+
 function addPreset(p) {
   hooks.flushSettings?.();
   S().rpPresets = [...presets(S()), p];

@@ -21,6 +21,7 @@ import './app/engine.js';
 import './app/voicemode.js';
 import './app/recipes-ui.js';
 import './app/errlog-ui.js';
+import './app/perf-ui.js';
 import './app/git-ui.js';
 import './app/packs-ui.js';
 import './app/automation.js';
@@ -57,6 +58,7 @@ import './app/info.js';
 import { loadConvs, newChat, refreshUsage, setMode } from './app/chatlist.js';
 import { refreshModels, updateModelUI } from './app/composer.js';
 import { appMode, chatPersona, hooks, pref, setAppMode, state } from './app/core.js';
+import { trackSites } from './perf.js';
 import { updateShortcuts, updateToolsChip } from './app/extras.js';
 import { updateHeader } from './app/render.js';
 import { openSettings } from './app/settings.js';
@@ -95,5 +97,6 @@ import { openSettings } from './app/settings.js';
   hooks.renderQuickBar?.();
   watchIcons(); // icons in place of the interface's emoji (line icons first; another pack redraws them)
   if (pref('iconPack') !== 'line') setIconPack(pref('iconPack'));
+  trackSites(pref('perfTrace')); // 🩺 on: timers and database reads note who started them (decision 247)
   document.body.dataset.ready = '1'; // the app is up and listening (the page shell is visible earlier)
 })();

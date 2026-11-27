@@ -29,6 +29,23 @@ describe('chat index', () => {
     expect(await indexChats(cs, { store, embed })).toBe(1);
     expect(Object.keys(store.m.get('c').chunks)).toHaveLength(1);
   });
+  // Decision 258: chats whose index is complete are passed over until they change – the background pass every 30 s went
+  // over every message of every chat, and read each chat's index, even with nothing to do
+  it('an index pass over chats that did not change reads nothing; a changed chat is looked at again', async () => {
+    const store = mem();
+    let reads = 0;
+    const get = store.get;
+    store.get = (id) => (reads++, get(id));
+    const cs = convs();
+    await indexChats(cs, { store, embed, budget: 99 });
+    reads = 0;
+    expect(await indexChats(cs, { store, embed, budget: 99 })).toBe(0);
+    expect(reads).toBe(0);
+    cs[0].messages.push(msg('user', 'And then a dragon flew over the castle', 3));
+    cs[0].updatedAt = 4;
+    expect(await indexChats(cs, { store, embed, budget: 99 })).toBe(1);
+    expect(reads).toBe(1);
+  });
   it('finds chats by meaning and merges with word hits', async () => {
     const store = mem();
     const cs = convs();

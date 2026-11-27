@@ -1,7 +1,7 @@
 // The drawer: usage meters, chat list, search across chats, pins, chat menu and automatic chat names.
 import { browserOpen, onBrowserChange, viewBrowser } from '../browsercontrol.js';
 import { streamChat, getUsage } from '../api.js';
-import { art, conversations, saveSettings, vectors } from '../store.js';
+import { art, conversations, liveReplies, saveSettings, vectors } from '../store.js';
 import { getWorkspace, deleteWorkspace } from '../sandbox.js';
 import { expandMapBlocks } from '../mapblock.js';
 import { avatarEl, newPersonaId, AVATAR_COLORS } from '../personas.js';
@@ -17,6 +17,7 @@ import { openUsageHistory } from './settings.js';
 import { makeChatPersona } from './personas-ui.js';
 import { P } from '../prompts.js';
 import { unfinishedQuietCheck } from '../autonomy.js';
+import { perfMark, perfStart } from '../perf.js';
 
 // ---------- Go allowance meters ----------
 function fmtReset(ms) {
@@ -190,34 +191,137 @@ $('#menu-btn').onclick = () => openDrawer(true);
 $('#scrim').onclick = () => openDrawer(false);
 
 // ---------- conversations ----------
+let loadedOnce = false;
+const liveSaved = new Set(); // chats with a reply saved on its own (removed once the chat is saved after its run)
+hooks.saveLiveReply = (c, at) => {
+  liveSaved.add(c.id);
+  liveReplies.put(c.id, { index: at, at: Date.now(), msg: c.messages[at] }).catch(() => {});
+};
+// ---------- chats whose messages are not loaded yet (decision 260) ----------
+// At start only the chats' records are read (title, times, settings): the list shows at once. Each chat's messages are
+// loaded when it is opened, and the rest a few at a time while the app is idle, newest first. Until then a chat's
+// messages read as an empty list that cannot be changed, and saving it writes only its record – its stored messages stay.
+const NONE = Object.freeze([]);
+const unloaded = new WeakSet();
+const loadingMsgs = new Map();
+const failedMsgs = new WeakSet();
+let liveByChat = new Map(); // replies saved on their own (258), put back when their chat's messages are loaded
+const toConvert = []; // chats saved by an earlier version (messages in the record): saved apart in the background
+function asUnloaded(rec) {
+  const { split: _s, ...c } = rec;
+  Object.defineProperty(c, 'messages', { get: () => NONE, enumerable: false, configurable: true });
+  unloaded.add(c);
+  return c;
+}
+/** Are this chat's messages in memory? */
+const messagesLoaded = (c) => !!c && !unloaded.has(c);
+/** The chat with its messages, read from the database if they were not yet. */
+function loadMessages(c) {
+  if (!c || !unloaded.has(c)) return Promise.resolve(c);
+  if (loadingMsgs.has(c)) return loadingMsgs.get(c);
+  const p = conversations
+    .messagesOf(c.id)
+    .then((m) => {
+      if (!unloaded.has(c)) return c;
+      Object.defineProperty(c, 'messages', { value: Array.isArray(m) ? m : [], writable: true, enumerable: true, configurable: true });
+      unloaded.delete(c);
+      afterLoad(c);
+      return c;
+    })
+    .catch(() => (failedMsgs.add(c), c))
+    .finally(() => loadingMsgs.delete(c));
+  loadingMsgs.set(c, p);
+  return p;
+}
+/** Every chat's messages loaded (for a search over all of them, the storage view, the background tasks). */
+async function loadAllMessages() {
+  for (const c of [...(state.convs || [])]) if (unloaded.has(c) && !failedMsgs.has(c)) await loadMessages(c);
+}
+const allMessagesLoaded = () => !(state.convs || []).some((c) => unloaded.has(c) && !failedMsgs.has(c));
+let background = null;
+function loadInBackground() {
+  if (background) return background;
+  const idle = () => new Promise((r) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(() => r(), { timeout: 400 }) : setTimeout(r, 20)));
+  background = (async () => {
+    for (;;) {
+      const next = (state.convs || []).find((c) => unloaded.has(c) && !failedMsgs.has(c));
+      if (!next) break;
+      await idle();
+      await loadMessages(next);
+    }
+    while (toConvert.length) {
+      const c = toConvert.shift();
+      await idle();
+      if (state.convs.includes(c) && messagesLoaded(c)) await conversations.put(c).catch(() => {});
+    }
+  })().finally(() => (background = null));
+  return background;
+}
+/** What a chat whose messages were just loaded may still need: a reply saved on its own, a cut-off one marked as such. */
+function afterLoad(c) {
+  let changed = false;
+  const r = liveByChat.get(c.id);
+  if (r) {
+    liveByChat.delete(c.id);
+    liveReplies.remove(c.id).catch(() => {});
+    const was = c.messages[r.index];
+    // put back unless the chat was saved after the reply (its copy is the newer one)
+    if (r.msg && r.index >= 0 && r.index <= c.messages.length && (!was || was.streaming)) {
+      c.messages[r.index] = { ...r.msg, streaming: true };
+      c.messages.length = r.index + 1;
+      changed = true;
+    }
+  }
+  // a quiet check whose run the app did not live to finish: it would have been taken out, so it is now
+  const q = unfinishedQuietCheck(c.messages);
+  if (q >= 0) {
+    c.messages.splice(q);
+    changed = true;
+  }
+  // a reply that was still being written when the app was closed would otherwise look "writing" forever
+  for (const m of c.messages) {
+    if (!m.streaming) continue;
+    delete m.streaming;
+    delete m.live;
+    if (!m.content?.trim() && !(m.rounds || []).length) m.error = 'The app was closed before this reply was finished. Tap Retry.';
+    // a half-written reply says it was cut off, with Continue, instead of looking finished (decision 172)
+    else if (!m.error) m.cut = { reason: 'closed' };
+  }
+  if (changed) conversations.put(c).catch(() => {});
+}
 async function loadConvs() {
-  const stored = await conversations.all();
+  const stored = await conversations.heads();
   // a chat that is already open in the app stays the same object: the chat on screen, a reply that is being written and
   // every later save hold on to it. Swapping in the stored copy would leave two versions of the chat, and the older
   // one (the list's) would be shown – and saved over the newer – the next time the chat is opened.
   const open = new Map((state.convs || []).map((c) => [c.id, c]));
   if (state.current) open.set(state.current.id, state.current);
-  state.convs = stored.map((c) => open.get(c.id) || c);
-  // a reply that was still being written when the app was closed would otherwise look "writing" forever
-  for (const c of state.convs) {
-    if (open.get(c.id) === c) continue; // live: its reply may really be writing
-    // a quiet check whose run the app did not live to finish: it would have been taken out, so it is now
-    const q = unfinishedQuietCheck(c.messages || []);
-    if (q >= 0) {
-      c.messages.splice(q);
-      conversations.put(JSON.parse(JSON.stringify(c))).catch(() => {});
+  const fresh = [];
+  state.convs = stored.map((r) => {
+    const had = open.get(r.id);
+    if (had) return had;
+    if (r.split) return asUnloaded(r);
+    fresh.push(r); // an earlier version's record, messages and all
+    toConvert.push(r);
+    return r;
+  });
+  if (!loadedOnce) {
+    const live = await liveReplies.all().catch(() => []);
+    const ids = new Set(state.convs.map((c) => c.id));
+    for (const r of live) {
+      if (ids.has(r.id)) liveByChat.set(r.id, r);
+      else liveReplies.remove(r.id).catch(() => {});
     }
-    for (const m of c.messages || []) {
-      if (!m.streaming) continue;
-      delete m.streaming;
-      delete m.live;
-      if (!m.content?.trim() && !(m.rounds || []).length) m.error = 'The app was closed before this reply was finished. Tap Retry.';
-      // a half-written reply says it was cut off, with Continue, instead of looking finished (decision 172)
-      else if (!m.error) m.cut = { reason: 'closed' };
-    }
+    loadedOnce = true;
   }
+  for (const c of fresh) afterLoad(c);
   renderConvList();
+  loadInBackground();
 }
+hooks.loadMessages = loadMessages;
+hooks.messagesLoaded = messagesLoaded;
+hooks.loadAllMessages = loadAllMessages;
+hooks.allMessagesLoaded = allMessagesLoaded;
 
 let showArchived = false;
 let listDay = '';
@@ -225,9 +329,12 @@ let listStale = false; // a save changed something the shut drawer didn't redraw
 const titled = new Map(); // the title each chat had when the list was last drawn
 // open on a phone, or always on a wide screen (tablet, unfolded phone) where the drawer sits beside the chat
 const listShown = () => document.body.classList.contains('drawer-open') || matchMedia('(min-width: 900px)').matches;
+// while a chat is being opened, the list is drawn once at the end – not also for each step on the way (the send button's
+// state, the mode tab): it was drawn two or three times per switch (decision 258)
+let listHeld = 0;
 /** Something the list shows changed (a spinner, a dot): redrawn now if you can see the list, else when it opens. */
 function convListChanged() {
-  if (listShown()) renderConvList();
+  if (listShown() && !listHeld) renderConvList();
   else listStale = true;
 }
 function convItem(c, nested = false) {
@@ -308,7 +415,23 @@ function snippetAround(text, i, len) {
   const b = Math.min(text.length, i + len + 60);
   return { pre: (a > 0 ? '…' : '') + text.slice(a, i).replace(/\s+/g, ' '), hit: text.slice(i, i + len), post: text.slice(i + len, b).replace(/\s+/g, ' ') + (b < text.length ? '…' : '') };
 }
+// each message's text in lower case, made once (and again when it changes): every search made it again for every message
+// of every chat, on each key (decision 258)
+const lowered = new WeakMap();
+function lowerOf(m) {
+  const text = typeof m.content === 'string' ? m.content : '';
+  const h = lowered.get(m);
+  if (h && h.src === text) return h.low;
+  const low = text.toLowerCase();
+  lowered.set(m, { src: text, low });
+  return low;
+}
 function renderConvSearch(list) {
+  // a search goes over every chat: the ones not loaded yet are read first, then it is drawn again (decision 260)
+  if (!allMessagesLoaded()) {
+    const asked = convQuery;
+    loadAllMessages().then(() => asked === convQuery && renderConvList());
+  }
   const q = convQuery.toLowerCase();
   const results = [];
   for (const c of state.convs) {
@@ -317,7 +440,7 @@ function renderConvSearch(list) {
     let n = 0;
     for (const [mi, m] of (c.messages || []).entries()) {
       const text = typeof m.content === 'string' ? m.content : '';
-      const i = text.toLowerCase().indexOf(q);
+      const i = lowerOf(m).indexOf(q);
       if (i < 0) continue;
       n++;
       if (!first) first = { mi, ...snippetAround(text, i, q.length) };
@@ -382,6 +505,7 @@ function renderConvSearch(list) {
 }
 
 function renderConvList() {
+  if (listHeld) return void (listStale = true);
   listStale = false;
   const list = $('#conv-list');
   list.innerHTML = '';
@@ -407,7 +531,7 @@ function renderConvList() {
   for (const f of folders) {
     const chats = active.filter((c) => !c.pinned && c.folderId === f.id);
     chats.forEach((c) => inFolder.add(c.id));
-    list.append(folderHeader(f, chats.length));
+    list.append(folderHeader(f, chats));
     if (!f.collapsed) chats.forEach((c) => list.append(convItem(c, true)));
   }
   const rest = active.filter((c) => !c.pinned && !inFolder.has(c.id));
@@ -435,14 +559,23 @@ function renderConvList() {
 const folderMode = () => (appMode === 'rp' ? 'rp' : 'chat');
 const folderList = () => (state.settings.folders || []).filter((f) => (f.mode || 'chat') === folderMode());
 const folderById = (id) => (state.settings.folders || []).find((f) => f.id === id);
-function folderHeader(f, count) {
+function folderHeader(f, chats) {
+  const count = chats.length;
   const row = el('div', 'folder-row');
   const t = el('button', 'folder-title');
   t.append(el('span', 'folder-caret', f.collapsed ? '▸' : '▾'), el('span', 'folder-name', `📁 ${f.name}`), el('span', 'folder-count', String(count)));
+  // only this folder's rows go or come: the whole list was drawn again for one folder (decision 258)
   t.onclick = () => {
     f.collapsed = !f.collapsed;
     saveSettings(state.settings);
-    renderConvList();
+    if (!row.isConnected) return renderConvList();
+    t.querySelector('.folder-caret').textContent = f.collapsed ? '▸' : '▾';
+    if (f.collapsed) while (row.nextElementSibling?.classList.contains('in-folder')) row.nextElementSibling.remove();
+    else {
+      const frag = document.createDocumentFragment();
+      chats.forEach((c) => frag.append(convItem(c, true)));
+      row.after(frag);
+    }
   };
   const more = el('button', 'conv-more', '⋮');
   more.setAttribute('aria-label', 'Folder options');
@@ -567,8 +700,11 @@ $('#cm-folder-cancel').onclick = () => {
 // ---------- chat menu: rename / auto-name / archive / delete ----------
 let menuConv = null;
 let lastAnchor = null;
-function openChatMenu(c, anchor = null, { compact = false } = {}) {
+function openChatMenu(c, anchor = null, opts = {}) {
   if (!c) return;
+  // the menu's actions (fork, export, auto-name, compact…) need the chat's messages: read first if not loaded (260)
+  if (!messagesLoaded(c)) return void loadMessages(c).then(() => messagesLoaded(c) && openChatMenu(c, anchor, opts));
+  const { compact = false } = opts;
   // from the side menu only the chat-list actions (pin, rename, folder, fork, archive, delete); the chat's own ⋮ has everything
   if (compact) $('#chat-menu').dataset.compact = '1';
   else delete $('#chat-menu').dataset.compact;
@@ -853,7 +989,7 @@ $('#cm-delete').onclick = async () => {
   openSheet('#chat-menu', false);
   markDeleted(c.id);
   // a Claude Code / PC agent chat: its session goes too (in Claude Code each one is a running process)
-  if (c.acp?.sessionId) hooks.acpCloseSession?.(c.acp.agentId, c.acp.sessionId);
+  if (c.acp?.sessionId) hooks.acpCloseSession?.(c.acp.agentId, c.acp.sessionId, c);
   await conversations.remove(c.id);
   vectors.remove(c.id).catch(() => {}); // its search index goes with it
   deleteWorkspace(c.id);
@@ -974,17 +1110,27 @@ function newChat({ focus = false } = {}) {
 }
 
 function selectConv(id) {
+  const c0 = state.convs.find((x) => x.id === id);
+  // its messages first, if they are not loaded yet (decision 260)
+  if (c0 && !messagesLoaded(c0)) return loadMessages(c0).then(() => (messagesLoaded(c0) ? selectConv(id) : toast('Could not read this chat from storage')));
+  // 🩺 switching chats is measured as its own trace (decision 246): it was reported under "While typing" before
+  if (c0 && state.current?.id !== id && pref('perfTrace')) perfStart(`Opening “${(c0.title || 'a chat').replace(/\s+/g, ' ').slice(0, 40)}”`, { ms: 4000, extra: hooks.linuxTop });
   if (state.current && state.current.id !== id) {
     hooks.leaveChat?.(state.current);
     hooks.stopForeground?.(state.current); // a reply that is still writing carries on in the background
   }
   setEditing(null);
-  const c = state.convs.find((x) => x.id === id);
+  const c = c0;
   if (!c) return;
   state.current = c;
   state.unseen.delete(c.id);
-  hooks.syncRuns?.(); // the send button shows whether THIS chat is writing
-  if (convIsRp(c) !== (appMode === 'rp')) setMode(convIsRp(c) ? 'rp' : 'chat', { fresh: false });
+  listHeld++;
+  try {
+    hooks.syncRuns?.(); // the send button shows whether THIS chat is writing
+    if (convIsRp(c) !== (appMode === 'rp')) setMode(convIsRp(c) ? 'rp' : 'chat', { fresh: false });
+  } finally {
+    listHeld--;
+  }
   updateHeader();
   updateToolsChip();
   getWorkspace(c.id).then(updateFilesChip);
@@ -994,9 +1140,14 @@ function selectConv(id) {
     saveSettings(state.settings);
   }
   updateModelUI(); // also when nothing was selected: the button shows this chat's preset (or no longer the last chat's)
+  perfMark('header and buttons');
   renderMessages();
-  renderConvList();
+  perfMark(`messages drawn (${c.messages.length})`);
+  renderConvList(); // once, after the steps above (they no longer draw it themselves, 258)
+  perfMark('chat list drawn');
   hooks.enterChat?.(c);
+  perfMark('chat opened');
+  requestAnimationFrame(() => perfMark('…and on screen'));
 }
 
 const deleted = new Set(); // chats deleted in this session: a reply that was still running must not save them back
@@ -1010,13 +1161,23 @@ function markDeleted(id) {
 }
 async function persist(conv = state.current) {
   const c = conv;
-  if (!c || deleted.has(c.id) || !c.messages.some((m) => !m.greeting)) return; // a chat with only a greeting isn't saved yet
+  // a chat with only a greeting isn't saved yet; one whose messages are not loaded is (its record: a schedule, a pin…,
+  // its stored messages untouched, decision 260)
+  if (!c || deleted.has(c.id) || (messagesLoaded(c) && !c.messages.some((m) => !m.greeting))) return;
   c.updatedAt = Date.now();
-  if (!c.title) {
+  if (!c.title && messagesLoaded(c)) {
     const first = c.messages.find((m) => m.role === 'user');
     c.title = (first?.content || first?.files?.[0]?.name || 'Image').replace(/\s+/g, ' ').slice(0, 60);
   }
-  await conversations.put(c);
+  try {
+    await conversations.put(c);
+  } catch {
+    return false; // said by the store (a toast); the chat stays in memory and the next save tries again (decision 256)
+  }
+  if (liveSaved.has(c.id) && !state.runs.has(c.id)) {
+    liveSaved.delete(c.id);
+    liveReplies.remove(c.id).catch(() => {});
+  }
   const before = state.convs.map((x) => x.id).join();
   if (!state.convs.some((x) => x.id === c.id)) state.convs.unshift(c);
   state.convs.sort((a, b) => b.updatedAt - a.updatedAt);

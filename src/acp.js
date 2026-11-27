@@ -31,15 +31,20 @@ export class AcpClient {
     this.configs = new Map(); // session id → its configOptions (model, effort, mode…), as the agent last sent them
   }
   async post(msg, path = '/send') {
-    const r = await this.http(this.url + path, { method: 'POST', headers: this.h, body: JSON.stringify(msg), timeoutMs: 15000 });
+    // 45 s: a busy phone (Claude Code working under proot) can be slow to take a message it does deliver
+    const r = await this.http(this.url + path, { method: 'POST', headers: this.h, body: JSON.stringify(msg), timeoutMs: 45000 });
     if (r.status === 401) throw new Error('The PC agent refused the secret');
     if (r.status >= 400) throw new Error(`The PC agent answered HTTP ${r.status}`);
   }
-  request(method, params) {
+  /** onPosted: the bridge took the request (it is the agent's now) – long before a prompt's answer, which ends the turn. */
+  request(method, params, { onPosted = null } = {}) {
     const id = this.id++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.post({ jsonrpc: '2.0', id, method, params }).catch((e) => (this.pending.delete(id), reject(e)));
+      this.post({ jsonrpc: '2.0', id, method, params }).then(
+        () => onPosted?.(),
+        (e) => (this.pending.delete(id), reject(e)),
+      );
     });
   }
   notify(method, params) {
@@ -80,9 +85,26 @@ export class AcpClient {
       }
       downSince = 0;
       probed = null;
-      const j = JSON.parse(r.body || '{}');
+      let j;
+      try {
+        j = JSON.parse(r.body || '{}');
+      } catch {
+        // a torn body, or not the bridge at all (a captive portal's page): handled like a bridge that does not answer,
+        // with its wait – never polled back to back
+        if (await down()) return;
+        continue;
+      }
+      // another run of the bridge than the one this client started with: it was restarted, and nothing it had is there
+      if (this.run && j.run && j.run !== this.run) return this.fail(new Error('the bridge was restarted – send again; a session is reopened from disk when it can'));
       this.next = j.next ?? this.next;
-      for (const m of j.events || []) await this.dispatch(m);
+      if (j.reset) return this.fail(new Error('the bridge had moved past what this chat had read – send again; a session is reopened from disk when it can'));
+      for (const m of j.events || []) {
+        try {
+          await this.dispatch(m);
+        } catch {
+          // one broken event or handler does not end the stream: the rest still arrives
+        }
+      }
     }
   }
   fail(e) {
@@ -108,13 +130,26 @@ export class AcpClient {
       return this.onUpdate(u, m.params?.sessionId);
     }
     if (m.method === 'session/request_permission' && m.id != null) {
-      let optionId = null;
-      try {
-        optionId = await this.onPermission(m.params);
-      } catch {
-        optionId = null;
-      }
-      return this.post({ jsonrpc: '2.0', id: m.id, result: { outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } } }).catch(() => {});
+      // not awaited: a question waiting for its answer must not hold up every chat's stream (like bridge/mcp above)
+      void (async () => {
+        let optionId = null;
+        try {
+          optionId = await this.onPermission(m.params);
+        } catch {
+          optionId = null;
+        }
+        // the answer is retried: a lost one leaves the agent waiting on the question for good (decision 254)
+        const answer = { jsonrpc: '2.0', id: m.id, result: { outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } } };
+        for (let i = 0; i < 4 && !this.closed; i++) {
+          try {
+            return await this.post(answer);
+          } catch {
+            await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
+          }
+        }
+        this.onPermissionLost?.(m.params);
+      })();
+      return;
     }
     if (m.id != null && m.method) return this.post({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `${m.method} is not offered by this client` } }).catch(() => {});
   }
@@ -142,8 +177,19 @@ export class AcpClient {
     await this.post({ rid, message: { jsonrpc: '2.0', id: msg.id ?? null, ...reply } }, '/mcp-reply').catch((e) => this.onMcpLate?.({ method: msg.method, tool: msg.params?.name || '', seconds: Math.round((Date.now() - t0) / 1000), error: String(e?.message || e) }));
   }
   async start() {
-    this.loop();
-    this.info = await this.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'chronicle', version: '1' } });
+    // where to start reading: the bridge's current end, asked before anything is sent – a new client is not handed the
+    // events of clients before it (old answers, old permission questions), nor told "reset" because the bridge has
+    // dropped those (an older bridge says nothing: from 0, as before)
+    try {
+      const h = await this.http(`${this.url}/health`, { method: 'GET', headers: this.h, timeoutMs: 15000 });
+      const j = h.status === 200 ? JSON.parse(h.body || '{}') : {};
+      if (Number.isInteger(j.next) && j.next >= 0) this.next = j.next;
+      if (j.run) this.run = j.run;
+    } catch {
+      /* the loop finds out what is wrong */
+    }
+    this.loop().catch((e) => this.fail(e)); // a bug in the loop must still end as a failure, not a silent stop
+    this.info = await this.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, session: { cursors: {} } }, clientInfo: { name: 'chronicle', version: '1' } });
     return this.info;
   }
   /** Does the agent take a system prompt on session/new (sessionCapabilities.systemPrompt, e.g. claude-agent-acp)? */
@@ -177,6 +223,21 @@ export class AcpClient {
     if (Array.isArray(r?.configOptions)) this.configs.set(sessionId, r.configOptions);
     return true;
   }
+  /** Can the agent copy a session up to a point (ACP session/fork with a cursor, decision 253)? */
+  get canFork() {
+    return !!this.info?.agentCapabilities?.sessionCapabilities?.fork;
+  }
+  /**
+   * A new session with the history of sessionId before the cursor cursorId: a reply asked again, or the last message
+   * edited, goes on from there instead of starting over with a copy of the chat as text. → the new session's id.
+   */
+  async forkSession(sessionId, cursorId, cwd = '.', { systemPrompt = '', mcpServers = [], meta = null } = {}) {
+    const extra = systemPrompt && this.takesSystemPrompt ? { systemPrompt: { mode: 'append', content: [{ type: 'text', text: systemPrompt }] } } : {};
+    const r = await this.request('session/fork', { sessionId, cursorId, cwd, mcpServers, ...extra, ...(meta ? { _meta: meta } : {}) });
+    if (!r?.sessionId) throw new Error('the agent did not make the copy');
+    if (Array.isArray(r?.configOptions)) this.configs.set(r.sessionId, r.configOptions);
+    return r.sessionId;
+  }
   /** session/set_config_option (the model, its effort…): the agent answers with all the options as they are now. */
   async setConfigOption(sessionId, configId, value) {
     const r = await this.request('session/set_config_option', { sessionId, configId, value });
@@ -188,10 +249,12 @@ export class AcpClient {
     this.configs.delete(sessionId);
     if (!this.info?.agentCapabilities?.sessionCapabilities?.close) return false;
     await this.request('session/close', { sessionId }).catch(() => {});
+    this.sessions?.delete(sessionId); // a closed session is not live: the next send must reopen it, not skip its ladder
     return true;
   }
-  prompt(sessionId, text) {
-    return this.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+  /** onSent: the message reached the agent (decision 254) – its turn may still fail later, but it was seen. */
+  prompt(sessionId, text, { onSent = null } = {}) {
+    return this.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, { onPosted: onSent });
   }
   cancel(sessionId) {
     return this.notify('session/cancel', { sessionId }).catch(() => {});
@@ -252,6 +315,9 @@ export function readUpdate(u) {
     case 'usage_update':
       // the agent's own context: tokens in it now and its window (Claude Code sends one after each turn)
       return Number.isFinite(u.used) && u.size > 0 ? { ctx: { used: u.used, size: u.size } } : {};
+    case 'cursor_update':
+      // a point of the session a fork can start from: the one before the prompt just sent (decision 253)
+      return u.cursorId && u.capabilities?.fork ? { cursor: u.cursorId } : {};
     case 'plan':
       return { plan: (u.entries || []).map((e) => `${e.status === 'completed' ? '☑' : '☐'} ${e.content}`).join('\n') };
     default:

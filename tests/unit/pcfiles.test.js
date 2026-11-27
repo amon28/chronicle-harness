@@ -272,9 +272,12 @@ describe("the agent's report: jobs, depth, line numbers, append, and what a kill
     const bin = join(dir, 'pcfzzz');
     copyFileSync('/bin/sleep', bin);
     chmodSync(bin, 0o755);
-    const ps = [spawn(bin, ['300']), spawn(bin, ['300'])];
+    // started as "sleep": on newer Ubuntu (the GitHub runner) sleep is one multi-call program that picks what to do by
+    // the name it is started as, and as "pcfzzz" it quits at once. The process is still called pcfzzz (its file name).
+    const ps = [spawn(bin, ['300'], { argv0: 'sleep' }), spawn(bin, ['300'], { argv0: 'sleep' })];
     procs.push(...ps);
     await new Promise((r) => setTimeout(r, 300));
+    expect(ps.map((p) => p.exitCode)).toEqual([null, null]); // both really running before the kill is tried
     const by = ctx(box, 'auto');
     by.phone.bypass = () => true;
     const stop = await run('pc_shell', { command: 'pkill pcfzzz' }, by);

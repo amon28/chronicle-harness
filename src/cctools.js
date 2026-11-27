@@ -12,7 +12,9 @@ export const SERVER = 'chronicle';
  * The phone and app tools Claude Code does not have itself. Not here: Chronicle's file, shell and Python tools
  * (Claude Code has Bash/Read/Edit/Write in the same Linux), fetch_url (it has WebFetch), delegate and ask_user (it has
  * its own subagents and questions), schedules (a scheduled run of a Claude Code chat would go to the chat's normal
- * model, not to Claude Code), goals, scripts, plans, mods, personas.
+ * model, not to Claude Code), goals, scripts, plans, mods, manage_mcp (Claude Code's server list is part of its
+ * session: changing it from inside would start a new one). The creator tools are here since decision 250: making
+ * personas, characters and lorebooks, each save shown to the user for approval as for any model.
  */
 export const CC_TOOLS = new Set([
   'web_search',
@@ -46,6 +48,17 @@ export const CC_TOOLS = new Set([
   'memory',
   'search_chats',
   'read_chat',
+  // the creator tools (decision 250): personas, roleplay characters, lorebooks, snippets/recipes
+  'list_personas',
+  'roleplay_presets',
+  'read_persona',
+  'save_persona',
+  'save_character',
+  'edit_persona',
+  'save_lorebook',
+  'edit_lorebook',
+  'read_lorebook',
+  'shortcuts',
 ]);
 
 /** The app's tool definitions (toolDefs for the chat's switches) → the MCP tools a Claude Code chat gets. */
@@ -62,8 +75,8 @@ export function mcpToolList(defs) {
   return out;
 }
 
-/** The chat's switches for Claude Code's sake: tools off → none; no shell/Python/delegate (Claude Code has its own). */
-export const ccEnabled = (enabled, toolsOn) => (toolsOn ? { ...enabled, shell: false, python: false, delegate: false, creator: false, modAuthor: false, advisor: false, planMode: false, claudecode: false, skills: [], vision: true } : null);
+/** The chat's switches for Claude Code's sake: tools off → none; no shell/Python/delegate (Claude Code has its own). The creator tools follow the chat's switch (decision 250). */
+export const ccEnabled = (enabled, toolsOn) => (toolsOn ? { ...enabled, shell: false, python: false, delegate: false, modAuthor: false, advisor: false, planMode: false, claudecode: false, skills: [], vision: true } : null);
 
 // ---------- Claude Code calls Chronicle's models (decision 167) ----------
 /** Tools Chronicle adds for Claude Code beyond CC_TOOLS: a helper on one of the user's models, and the list of them. */

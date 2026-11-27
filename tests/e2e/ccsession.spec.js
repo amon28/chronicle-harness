@@ -43,7 +43,9 @@ async function sid(app) {
   return /Echo from (s\d+)/.exec(await reply(app).innerText())[1];
 }
 
-test('an edited and resent message in a Claude Code chat starts over in a new session with the chat as it now is', async ({ app }) => {
+// (since decision 257 an edited message forks the session at the point before it: the turns before it as real turns,
+// without the old wording – not a new session given the chat as text)
+test('an edited and resent message in a Claude Code chat goes on in a copy of the session from before it, without the old wording', async ({ app }) => {
   await ccChat(app, 41733);
   await send(app, 'echo first try');
   const first = await sid(app);
@@ -56,7 +58,8 @@ test('an edited and resent message in a Claude Code chat starts over in a new se
   await app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 30000 });
   const edited = await sid(app);
   expect(edited).not.toBe(first);
-  await expect(reply(app)).toContainText('Earlier in this chat'); // the chat so far went along
+  await expect(reply(app)).toContainText(`forked from ${first} with 1 earlier turns`); // the first exchange, as a real turn
+  await expect(reply(app)).not.toContainText('A new Claude Code session');
   await send(app, 'echo third');
   expect(await sid(app)).toBe(edited); // …and the new session carries on
 });

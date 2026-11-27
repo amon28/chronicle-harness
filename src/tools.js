@@ -243,7 +243,7 @@ export function deferredSections(enabled) {
   if (enabled.claudecode) out.push({ key: 'claudecode', names: ['claude_code'], text: claudeCodePrompt() });
   if (enabled.autonomy) out.push({ key: 'schedule', names: ['schedule_task'], text: schedulePrompt() });
   if (enabled.autonomy && enabled.delegate) out.push({ key: 'ralph', names: ['ralph_loop'], text: RALPH_LINE });
-  if (enabled.creator) out.push({ key: 'creator', names: ['edit_persona', 'edit_lorebook', 'list_personas', 'read_persona', 'save_character', 'save_lorebook', 'save_persona', 'shortcuts', 'manage_mcp', 'read_lorebook'], text: creatorPrompt() });
+  if (enabled.creator) out.push({ key: 'creator', names: ['roleplay_presets', 'edit_persona', 'edit_lorebook', 'list_personas', 'read_persona', 'save_character', 'save_lorebook', 'save_persona', 'shortcuts', 'manage_mcp', 'read_lorebook'], text: creatorPrompt() });
   if (enabled.web && enabled.delegate) out.push({ key: 'research', names: ['deep_research'], text: deepResearchPrompt() });
   if (enabled.intents) out.push({ key: 'intents', names: ['android_intent'], text: INTENTS_LINE });
   if (enabled.device) out.push({ key: 'device', names: ['calendar', 'contacts', 'location', 'places'], text: [devicePrompt(), placesPrompt().replace(mapBlockLine(), '').trim()].filter(Boolean).join('\n') });
@@ -1019,7 +1019,7 @@ async function runToolInner(call, ctx) {
           const r = await runModAuthorTool(call.name, args, ctx);
           if (r) return r;
         }
-        if (call.name === 'list_personas' || call.name === 'read_persona' || call.name === 'edit_persona' || call.name === 'edit_lorebook' || call.name === 'save_character' || call.name === 'save_lorebook' || call.name === 'save_persona') return await runCreatorTool(call.name, args, ctx);
+        if (call.name === 'roleplay_presets' || call.name === 'list_personas' || call.name === 'read_persona' || call.name === 'edit_persona' || call.name === 'edit_lorebook' || call.name === 'save_character' || call.name === 'save_lorebook' || call.name === 'save_persona') return await runCreatorTool(call.name, args, ctx);
         if (call.name === 'deep_research')
           return await runDeepResearch({ ...args }, { ...ctx, saveReport: w ? (path, text) => wsPut(w, path, text, { by: 'deep_research' }) : null }, async (name, a) => {
             // its searches and page reads follow your permissions like any other call
@@ -1065,6 +1065,7 @@ async function runToolInner(call, ctx) {
         }
         if (call.name === 'search_chats' || call.name === 'read_chat') {
           if (!ctx.chats) return { ok: false, result: 'Earlier chats are not available here.', display: { error: 'unavailable' } };
+          await ctx.chats.ready?.(); // every chat's messages read first (decision 260)
           if (call.name === 'search_chats') {
             const max = Math.max(1, Math.min(20, Number(args.max_results) || 8));
             let hits = searchChats(ctx.chats.list(), args.query, { exclude: ctx.convId, max });
@@ -1217,6 +1218,7 @@ export const TOOL_LABELS = {
   browser: ['🧭', 'Browser'],
   preview_page: ['🖼', 'Previewed the page'],
   list_personas: ['🎭', 'Looked at personas'],
+  roleplay_presets: ['🎛', 'Roleplay presets'],
   read_persona: ['🎭', 'Read a persona'],
   edit_persona: ['🎭', 'Changed a persona'],
   edit_lorebook: ['📚', 'Changed a lorebook'],

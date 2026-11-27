@@ -30,14 +30,56 @@ export function setKey(obj, key, value) {
   else obj[key] = value;
 }
 
+// What each workspace was when it was last saved: its files (the objects – a file is replaced, never changed in place)
+// and its checkpoints. A save writes only what differs (decision 259); one never saved apart is written whole once.
+const savedAs = new WeakMap();
+const snapOf = (w) => ({ files: new Map(Object.entries(w.files)), ck: w.checkpoints });
+
+// The workspaces kept in memory: the newest few used. One that is open on screen, running, saving or in the Python
+// sandbox stays; the others are let go (each held every file of its chat for the whole session, decision 259).
+const KEEP = 6;
+let busy = () => false;
+const onDrop = new Set();
+/** fn(convId) → true while that chat's workspace must stay in memory (on screen, a reply running). */
+export const setWorkspaceBusy = (fn) => (busy = fn);
+/** fn(convId) after a workspace was let go from memory (a copy kept elsewhere should go too). */
+export const onWorkspaceDropped = (fn) => onDrop.add(fn);
+const loading = new Map();
+function trimCache() {
+  for (const [id] of cache) {
+    if (cache.size <= KEEP) break;
+    if (saveTimers[id] || saving.has(id) || sandbox.convId === id || busy(id)) continue;
+    cache.delete(id);
+    for (const fn of onDrop) fn(id);
+  }
+}
+
 export async function getWorkspace(convId) {
-  if (cache.has(convId)) return cache.get(convId);
-  const w = (await workspaces.get(convId).catch(() => null)) || { id: convId, files: {} };
-  w.files = fileMap(w.files);
-  if (w.shellState) w.shellState = fileMap(w.shellState);
-  if (w.phoneState) w.phoneState = { in: fileMap(w.phoneState.in), out: fileMap(w.phoneState.out) };
-  cache.set(convId, w);
-  return w;
+  if (cache.has(convId)) {
+    const w = cache.get(convId);
+    cache.delete(convId); // the newest used goes last
+    cache.set(convId, w);
+    return w;
+  }
+  if (loading.has(convId)) return loading.get(convId); // two asking at once get the same one
+  const p = (async () => {
+    const rec = await workspaces.get(convId).catch(() => null);
+    if (cache.has(convId)) return cache.get(convId);
+    const w = rec || { id: convId, files: {} };
+    w.files = fileMap(w.files);
+    if (w.shellState) w.shellState = fileMap(w.shellState);
+    if (w.phoneState) w.phoneState = { in: fileMap(w.phoneState.in), out: fileMap(w.phoneState.out) };
+    if (rec?.stored === 'split') savedAs.set(w, snapOf(w));
+    cache.set(convId, w);
+    trimCache();
+    return w;
+  })();
+  loading.set(convId, p);
+  try {
+    return await p;
+  } finally {
+    loading.delete(convId);
+  }
 }
 
 // ---------- a small index of every workspace (count, size, newest change, the file list without bytes) ----------
@@ -107,15 +149,44 @@ export async function workspaceListing(id) {
 }
 
 let saveTimers = {};
+const saving = new Set();
+// a save copies the changed files on the screen's thread (all of them, the first time): it waits while you type (decision
+// 244), at most 15 s
+let lastKey = -1e9;
+if (typeof addEventListener === 'function') for (const ev of ['keydown', 'input']) addEventListener(ev, () => (lastKey = Date.now()), { capture: true, passive: true });
+const TYPING_QUIET = 1500;
+const TYPING_MAX = 15000;
 export function saveWorkspace(w) {
   clearTimeout(saveTimers[w.id]);
   listings.delete(w.id);
+  const first = Date.now();
   // the summary walks every file: once per burst of writes, not once per file (20,000 files copied in took
   // minutes when each write summarised the whole workspace again)
-  saveTimers[w.id] = setTimeout(() => {
+  const go = () => {
+    if (Date.now() - lastKey < TYPING_QUIET && Date.now() - first < TYPING_MAX) return (saveTimers[w.id] = setTimeout(go, 500));
+    delete saveTimers[w.id];
     summarize(w);
-    workspaces.put(w).catch((e) => console.warn('workspace not saved', w.id, e));
-  }, 300);
+    const now = snapOf(w);
+    const was = savedAs.get(w);
+    let job;
+    if (!was) job = workspaces.put(w);
+    else {
+      const put = [];
+      for (const [p, f] of now.files) if (was.files.get(p) !== f) put.push(p);
+      const del = [];
+      for (const p of was.files.keys()) if (!now.files.has(p)) del.push(p);
+      job = workspaces.putChanged(w, { put, del, ck: was.ck !== now.ck });
+    }
+    saving.add(w.id);
+    job
+      .then(() => savedAs.set(w, now))
+      .catch((e) => console.warn('workspace not saved', w.id, e))
+      .finally(() => {
+        saving.delete(w.id);
+        trimCache();
+      });
+  };
+  saveTimers[w.id] = setTimeout(go, 300);
 }
 
 export async function deleteWorkspace(convId) {

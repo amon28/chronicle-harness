@@ -1,20 +1,30 @@
 // Tiny IndexedDB wrapper for conversations + localStorage for settings.
+import { callSite, noteSite } from './perf.js';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 const DB_NAME = 'chronicle';
 const STORE = 'conversations';
 const WS_STORE = 'workspaces';
+// a chat's files, one record each, keyed [convId, path] (decision 259): the workspace record keeps the rest. A chat's
+// workspace was one record with every file's bytes, written whole after every change.
+const FILE_STORE = 'wsfiles';
+// a chat's messages, a record of their own keyed by the chat's id (decision 260): the chat's record keeps the rest
+// (title, times, settings), so the list can be read at start without every message of every chat
+const MSG_STORE = 'messages';
+const CK = '\u0000ck'; // the workspace record's checkpoints (the undo copies of the files) are a record of their own: id + CK
 const KV_STORE = 'kv'; // settings (personas, cards, lorebooks, memories…) – far more room than localStorage // per-chat sandbox files: { id: convId, files: { [path]: { data: Uint8Array, mtime } } }
 
 let dbPromise;
 function db() {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 3);
+      const req = indexedDB.open(DB_NAME, 5);
       req.onupgradeneeded = () => {
         const d = req.result;
         if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: 'id' });
         if (!d.objectStoreNames.contains(WS_STORE)) d.createObjectStore(WS_STORE, { keyPath: 'id' });
         if (!d.objectStoreNames.contains(KV_STORE)) d.createObjectStore(KV_STORE);
+        if (!d.objectStoreNames.contains(FILE_STORE)) d.createObjectStore(FILE_STORE);
+        if (!d.objectStoreNames.contains(MSG_STORE)) d.createObjectStore(MSG_STORE);
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -68,13 +78,20 @@ async function fromOldName(d) {
 }
 
 function tx(mode, fn, store = STORE) {
+  const site = callSite(3); // 🩺: who asked, for a slow frame after it (decision 247)
   return db().then(
     (d) =>
       new Promise((resolve, reject) => {
         const t = d.transaction(store, mode);
         const req = fn(t.objectStore(store));
-        t.oncomplete = () => resolve(req?.result);
+        t.oncomplete = () => {
+          if (site) noteSite('database', `${mode} ${store} ← ${site}`);
+          resolve(req?.result);
+        };
         t.onerror = () => reject(t.error);
+        // storage full and the like abort the transaction at commit, which fires only "abort": without this the save
+        // never settled and nothing said it failed (decision 256)
+        t.onabort = () => reject(t.error || new Error('The save was aborted (is the phone out of storage?)'));
       }),
   );
 }
@@ -83,20 +100,165 @@ function tx(mode, fn, store = STORE) {
 // fallback for the rare value IndexedDB can't copy (a function, a DOM node), which JSON quietly drops (decision 239)
 const putPlain = (put, v) => put(v).catch((e) => (e?.name === 'DataCloneError' ? put(JSON.parse(JSON.stringify(v))) : Promise.reject(e)));
 
+/** One transaction over the chats' records and their messages. */
+function convTx(mode, fn) {
+  return db().then(
+    (d) =>
+      new Promise((res, rej) => {
+        const t = d.transaction([STORE, MSG_STORE], mode);
+        const out = fn(t.objectStore(STORE), t.objectStore(MSG_STORE));
+        t.oncomplete = () => res(typeof out === 'function' ? out() : out);
+        t.onerror = () => rej(t.error);
+        t.onabort = () => rej(t.error || new Error('The save was aborted (is the phone out of storage?)'));
+      }),
+  );
+}
+/** Does this chat object carry its messages? (one whose messages are not loaded yet has none of its own, decision 260) */
+const hasMessages = (c) => Object.prototype.propertyIsEnumerable.call(c, 'messages') && Array.isArray(c.messages);
+function convMeta(c) {
+  const out = {};
+  for (const k of Object.keys(c)) if (k !== 'messages') out[k] = c[k];
+  out.split = 1;
+  return out;
+}
+/**
+ * Chats: { id, title, …, messages } to the app; in the database the chat's record and its messages apart (decision 260).
+ * A chat saved by an earlier version (messages in its record) is read as it is and saved apart from then on. A chat
+ * whose messages are not loaded yet is saved without them: its stored messages stay as they are.
+ */
 export const conversations = {
-  all: () => tx('readonly', (s) => s.getAll()).then((l) => (l || []).sort((a, b) => b.updatedAt - a.updatedAt)),
-  put: (c) => putPlain((v) => tx('readwrite', (s) => s.put(v)), c),
-  remove: (id) => tx('readwrite', (s) => s.delete(id)),
-  clear: () => tx('readwrite', (s) => s.clear()),
+  /** Every chat with its messages (a backup, an export). */
+  all: () =>
+    convTx('readonly', (cs, ms) => {
+      const recs = cs.getAll();
+      const keys = ms.getAllKeys();
+      const vals = ms.getAll();
+      return () => {
+        const byId = new Map((keys.result || []).map((k, i) => [k, vals.result[i]]));
+        return (recs.result || [])
+          .map((r) => {
+            if (!r.split) return r;
+            const { split: _s, ...c } = r;
+            return { ...c, messages: byId.get(r.id) || [] };
+          })
+          .sort((a, b) => b.updatedAt - a.updatedAt);
+      };
+    }),
+  /** The chats' records without their messages (those saved apart) – what the app reads at start. */
+  heads: () => tx('readonly', (s) => s.getAll()).then((l) => (l || []).sort((a, b) => b.updatedAt - a.updatedAt)),
+  /** One chat's messages (saved apart), or null. */
+  messagesOf: (id) => tx('readonly', (s) => s.get(id), MSG_STORE).then((m) => m || null),
+  // a failed chat save is said like a failed settings save (decision 256), and still rejects for the caller
+  put: (c) =>
+    putPlain(
+      (v) =>
+        convTx('readwrite', (cs, ms) => {
+          cs.put(convMeta(v));
+          if (hasMessages(v)) ms.put(v.messages, v.id);
+        }),
+      c,
+    ).catch((e) => (onSaveError?.(e), Promise.reject(e))),
+  remove: (id) =>
+    convTx('readwrite', (cs, ms) => {
+      cs.delete(id);
+      ms.delete(id);
+    }),
+  clear: () =>
+    convTx('readwrite', (cs, ms) => {
+      cs.clear();
+      ms.clear();
+    }),
 };
 
+/** One transaction over the workspace records and their files. fn(ws, files) → what to resolve with (read at the end). */
+function wsTx(mode, fn) {
+  return db().then(
+    (d) =>
+      new Promise((res, rej) => {
+        const t = d.transaction([WS_STORE, FILE_STORE], mode);
+        const out = fn(t.objectStore(WS_STORE), t.objectStore(FILE_STORE));
+        t.oncomplete = () => res(typeof out === 'function' ? out() : out);
+        t.onerror = () => rej(t.error);
+        t.onabort = () => rej(t.error || new Error('The save was aborted (is the phone out of storage?)'));
+      }),
+  );
+}
+const filesOf = (id) => IDBKeyRange.bound([id], [id, []]); // every [id, path]: a path is a string, [] sorts after them all
+/** The workspace record without its files and checkpoints (they are records of their own). */
+function wsMeta(w) {
+  const { files: _f, checkpoints: _c, ...rest } = w;
+  return { ...rest, split: 1 };
+}
+const plainFile = (f) => (f && Object.getPrototypeOf(f) !== Object.prototype && Object.getPrototypeOf(f) !== null ? { ...f } : f);
+/**
+ * Workspaces: { id, files: { [path]: { data, mtime, … } }, checkpoints, …rest } to the app; in the database the record
+ * (rest), each file, and the checkpoints apart (decision 259). A record saved whole by an earlier version is read as it
+ * is, and saved apart from then on.
+ */
 export const workspaces = {
-  all: () => tx('readonly', (s) => s.getAll(), WS_STORE).then((l) => l || []),
-  ids: () => tx('readonly', (s) => s.getAllKeys(), WS_STORE).then((l) => l || []),
-  get: (id) => tx('readonly', (s) => s.get(id), WS_STORE),
-  put: (w) => tx('readwrite', (s) => s.put(w), WS_STORE),
-  remove: (id) => tx('readwrite', (s) => s.delete(id), WS_STORE),
-  clear: () => tx('readwrite', (s) => s.clear(), WS_STORE),
+  all: async () => {
+    const out = [];
+    for (const id of await workspaces.ids()) {
+      const w = await workspaces.get(id);
+      if (w) out.push(w);
+    }
+    return out;
+  },
+  ids: () => tx('readonly', (s) => s.getAllKeys(), WS_STORE).then((l) => (l || []).filter((k) => !String(k).endsWith(CK))),
+  get: (id) =>
+    wsTx('readonly', (ws, fs) => {
+      const m = ws.get(id);
+      const ck = ws.get(id + CK);
+      let vals = null;
+      let keys = null;
+      m.onsuccess = () => {
+        if (!m.result?.split) return;
+        vals = fs.getAll(filesOf(id));
+        keys = fs.getAllKeys(filesOf(id));
+      };
+      return () => {
+        const rec = m.result;
+        if (!rec || !rec.split) return rec;
+        const files = {};
+        (keys?.result || []).forEach((k, i) => (files[k[1]] = vals.result[i]));
+        const w = { ...rec, files };
+        delete w.split;
+        if (ck.result?.list) w.checkpoints = ck.result.list;
+        Object.defineProperty(w, 'stored', { value: 'split', enumerable: false, configurable: true });
+        return w;
+      };
+    }),
+  /** The whole workspace: its record, every file (the ones it no longer has removed) and its checkpoints. */
+  put: (w) =>
+    wsTx('readwrite', (ws, fs) => {
+      fs.delete(filesOf(w.id));
+      for (const [p, f] of Object.entries(w.files || {})) fs.put(plainFile(f), [w.id, p]);
+      ws.put(wsMeta(w));
+      if (w.checkpoints?.length) ws.put({ id: w.id + CK, list: w.checkpoints });
+      else ws.delete(w.id + CK);
+    }).catch((e) => (onSaveError?.(e), Promise.reject(e))),
+  /** Only what changed: these files written, those removed, the record, and the checkpoints when `ck`. */
+  putChanged: (w, { put = [], del = [], ck = false } = {}) =>
+    wsTx('readwrite', (ws, fs) => {
+      for (const p of del) fs.delete([w.id, p]);
+      for (const p of put) if (w.files[p]) fs.put(plainFile(w.files[p]), [w.id, p]);
+      ws.put(wsMeta(w));
+      if (ck) {
+        if (w.checkpoints?.length) ws.put({ id: w.id + CK, list: w.checkpoints });
+        else ws.delete(w.id + CK);
+      }
+    }).catch((e) => (onSaveError?.(e), Promise.reject(e))),
+  remove: (id) =>
+    wsTx('readwrite', (ws, fs) => {
+      ws.delete(id);
+      ws.delete(id + CK);
+      fs.delete(filesOf(id));
+    }),
+  clear: () =>
+    wsTx('readwrite', (ws, fs) => {
+      ws.clear();
+      fs.clear();
+    }),
 };
 
 const SETTINGS_KEY = 'ocm.settings';
@@ -130,8 +292,8 @@ export const setSecretsLostHandler = (fn) => (onSecretsLost = fn);
 export const secureStorageActive = () => secureOk;
 
 /** Split settings into { secrets, clean } – clean has every key/token blanked. */
-function splitSecrets(s) {
-  const secrets = { providers: {}, providerAdmin: {}, mcp: {}, pc: {} };
+export function splitSecrets(s) {
+  const secrets = { providers: {}, providerAdmin: {}, mcp: {}, pc: {}, mcpOauth: {}, mcpBridge: {}, acp: {} };
   const clean = { ...s };
   for (const k of TOP_SECRETS) {
     if (s[k]) secrets[k] = s[k];
@@ -144,8 +306,24 @@ function splitSecrets(s) {
   });
   clean.mcpServers = (s.mcpServers || []).map((m) => {
     if (m.token) secrets.mcp[m.id] = m.token;
-    return { ...m, token: '' };
+    const c = { ...m, token: '' };
+    // the sign-in's access + refresh tokens and a phone-run server's bridge secret are keys too (decision 256)
+    if (m.oauth && (m.oauth.access || m.oauth.refresh)) {
+      secrets.mcpOauth[m.id] = { access: m.oauth.access || '', refresh: m.oauth.refresh || '' };
+      c.oauth = { ...m.oauth, access: '', refresh: '' };
+    }
+    if (m.bridgeSecret) {
+      secrets.mcpBridge[m.id] = m.bridgeSecret;
+      c.bridgeSecret = '';
+    }
+    return c;
   });
+  // a PC agent's bridge secret (decision 256)
+  clean.acpAgents = (s.acpAgents || []).map((a) => {
+    if (a.secret) secrets.acp[a.id] = a.secret;
+    return a.secret ? { ...a, secret: '' } : a;
+  });
+  if (!s.acpAgents) delete clean.acpAgents;
   // Files on my PC (decision 223): the secret pc-files.py printed
   clean.pcFiles = (s.pcFiles || []).map((p) => {
     if (p.secret) secrets.pc[p.id] = p.secret;
@@ -153,14 +331,25 @@ function splitSecrets(s) {
   });
   return { secrets, clean };
 }
-function mergeSecrets(s, sec) {
+/** Any key still in the plain settings (from before secure storage, or a kind of key added to it later). */
+export function hasPlainSecrets(s) {
+  const { secrets } = splitSecrets(s);
+  return Object.values(secrets).some((v) => (typeof v === 'string' ? v : Object.keys(v).length));
+}
+export function mergeSecrets(s, sec) {
   if (!sec) return s;
   for (const k of TOP_SECRETS) if (sec[k] && !s[k]) s[k] = sec[k];
   for (const p of s.providers || []) {
     if (!p.apiKey && sec.providers?.[p.id]) p.apiKey = sec.providers[p.id];
     if (!p.adminKey && sec.providerAdmin?.[p.id]) p.adminKey = sec.providerAdmin[p.id];
   }
-  for (const m of s.mcpServers || []) if (!m.token && sec.mcp?.[m.id]) m.token = sec.mcp[m.id];
+  for (const m of s.mcpServers || []) {
+    if (!m.token && sec.mcp?.[m.id]) m.token = sec.mcp[m.id];
+    const o = sec.mcpOauth?.[m.id];
+    if (o && m.oauth && !m.oauth.access && !m.oauth.refresh) m.oauth = { ...m.oauth, access: o.access, refresh: o.refresh };
+    if (!m.bridgeSecret && sec.mcpBridge?.[m.id]) m.bridgeSecret = sec.mcpBridge[m.id];
+  }
+  for (const a of s.acpAgents || []) if (!a.secret && sec.acp?.[a.id]) a.secret = sec.acp[a.id];
   for (const p of s.pcFiles || []) if (!p.secret && sec.pc?.[p.id]) p.secret = sec.pc[p.id];
   return s;
 }
@@ -208,7 +397,7 @@ export async function initSettings() {
   const sec = await readSecrets();
   mergeSecrets(settingsCache, sec);
   // first run with secure storage: move any plain-text keys out of IndexedDB
-  if (secureOk && s && (TOP_SECRETS.some((k) => s[k]) || (s.providers || []).some((p) => p.apiKey || p.adminKey) || (s.mcpServers || []).some((m) => m.token) || (s.pcFiles || []).some((p) => p.secret))) {
+  if (secureOk && s && hasPlainSecrets(s)) {
     saveSettings(settingsCache);
   }
   try {
@@ -296,6 +485,24 @@ export const gitData = {
   get: (id) => kvGet('git:' + id).then((v) => v || null).catch(() => null),
   put: (id, v) => kvPut('git:' + id, v),
   remove: (id) => kvDel('git:' + id),
+};
+/**
+ * The reply a chat is writing, saved on its own every few seconds while it runs (decision 258): the whole chat was saved
+ * each time – a long agent chat is megabytes. On the next start a reply the app did not live to save with its chat is
+ * put back from here.
+ */
+export const liveReplies = {
+  put: (id, v) => putPlain((x) => kvPut('live:' + id, x), v),
+  remove: (id) => kvDel('live:' + id),
+  all: () =>
+    db().then(
+      (d) =>
+        new Promise((res, rej) => {
+          const r = d.transaction(KV_STORE).objectStore(KV_STORE).getAllKeys(IDBKeyRange.bound('live:', 'live:\uffff'));
+          r.onsuccess = () => res((r.result || []).map((k) => String(k).slice(5)));
+          r.onerror = () => rej(r.error);
+        }),
+    ).then((ids) => Promise.all(ids.map((id) => kvGet('live:' + id).then((v) => (v ? { id, ...v } : null))))).then((l) => l.filter(Boolean)),
 };
 /** Message vectors per chat (search by meaning, roleplay recall). */
 export const vectors = {

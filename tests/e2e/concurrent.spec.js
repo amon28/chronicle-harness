@@ -11,6 +11,7 @@ test('a chat keeps writing while you use another one; spinner while busy, blue d
   await expect(app.locator('body')).not.toHaveClass(/streaming/); // this (new) chat is idle: the send button is normal
   await send(app, 'hello from chat B');
   await expect(app.locator('.msg.assistant').last()).not.toBeEmpty();
+  const usageB = await app.locator('#usage').textContent(); // B's numbers: A finishing in the background must not change them (256)
   // A is still busy: spinner beside its name
   await app.click('#menu-btn');
   const a = app.locator('#conv-list .conv-item', { hasText: 'LONGTHINK first chat' });
@@ -21,6 +22,7 @@ test('a chat keeps writing while you use another one; spinner while busy, blue d
   await app.click('#menu-btn');
   await expect(a.locator('.unseen-dot')).toBeVisible();
   await expect(a.locator('.run-spin')).toHaveCount(0);
+  expect(await app.locator('#usage').textContent()).toBe(usageB);
   // open A: its reply is complete and the dot goes away
   await a.locator('.conv-title').click();
   await expect(app.locator('#messages > .msg.assistant')).toHaveCount(1);

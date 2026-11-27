@@ -10,6 +10,22 @@ function fnv1a(s) {
 }
 const h = (x) => fnv1a(typeof x === 'string' ? x : JSON.stringify(x ?? null));
 
+// a long message's text is hashed once: the same history goes out again on every step of every reply (decision 258).
+// Keyed by the text (the chat holds it anyway); a few thousand kept.
+const textHash = new Map();
+const TEXT_KEEP = 4000;
+function hashText(s) {
+  if (s.length < 512) return fnv1a(s);
+  let v = textHash.get(s);
+  if (v === undefined) {
+    v = fnv1a(s);
+    if (textHash.size >= TEXT_KEEP) textHash.delete(textHash.keys().next().value);
+    textHash.set(s, v);
+  }
+  return v;
+}
+const msgHash = (m) => fnv1a(`${m.role}\u0000${typeof m.content === 'string' ? hashText(m.content) : h(m.content)}\u0000${m.tool_calls ? JSON.stringify(m.tool_calls) : ''}\u0000${m.tool_call_id || ''}`);
+
 /** A request's shape for the comparison: a hash of its tools and of each message (the first system one is "system"). */
 export function requestShape(req) {
   const msgs = req?.messages || [];
@@ -17,7 +33,7 @@ export function requestShape(req) {
   // the per-turn context after the history (memories, notes): trailing system messages, expected to change
   let tail = msgs.length;
   while (tail > 0 && msgs[tail - 1].role === 'system') tail--;
-  return { model: req?.model || '', tools: h(req?.tools || []), msgs: msgs.map((m) => h({ r: m.role, c: m.content, t: m.tool_calls, i: m.tool_call_id })), system: sysEnd < 0 ? msgs.length : sysEnd, tail };
+  return { model: req?.model || '', tools: h(req?.tools || []), msgs: msgs.map(msgHash), system: sysEnd < 0 ? msgs.length : sysEnd, tail };
 }
 
 /**

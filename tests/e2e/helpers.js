@@ -14,6 +14,37 @@ export const test = base.extend({
     await request.post(MOCK + '/__reset');
     const seed = { apiKey: 'good', proxyUrl: MOCK, model: 'glm-5.3', ...appSettings, prefs: { learn: false, autoTitle: false, tools: false, userName: 'Alex', ...(appSettings.prefs || {}) } };
     await page.addInitScript((mock) => (globalThis.__MOCK = mock), MOCK);
+    // a chat as saved, with its messages (they are a record of their own since decision 260), in the shape of an
+    // IndexedDB request: tests read it with .onsuccess / .result like a store's get / getAll
+    await page.addInitScript(() => {
+      const req = (p) => {
+        const r = {};
+        p.then((v) => {
+          r.result = v;
+          r.onsuccess?.({ target: r });
+        });
+        return r;
+      };
+      const read = () =>
+        new Promise((res) => {
+          const q = indexedDB.open('chronicle');
+          q.onsuccess = () => {
+            const t = q.result.transaction(['conversations', 'messages']);
+            const cs = t.objectStore('conversations').getAll();
+            const mk = t.objectStore('messages').getAllKeys();
+            const mv = t.objectStore('messages').getAll();
+            t.oncomplete = () => {
+              const byId = new Map(mk.result.map((k, i) => [k, mv.result[i]]));
+              res(cs.result.map((c) => (c.split ? { ...c, messages: byId.get(c.id) || [] } : c)));
+            };
+          };
+        });
+      globalThis.__ocmChatsReq = () => req(read());
+      globalThis.__ocmChatReq = (id) => req(read().then((l) => l.find((c) => c.id === id)));
+    });
+    // the npm registry is never asked from a test (Claude Code's update notice, decision 248): a test that wants an
+    // answer sets its own
+    await page.addInitScript(() => (globalThis.__ocmNpmHttp = async () => ({ status: 404, body: '' })));
     await page.addInitScript((seed) => {
       try {
         if (!localStorage.getItem('ocm.settingsInIdb') && !localStorage.getItem('ocm.settings')) localStorage.setItem('ocm.settings', JSON.stringify(seed));
@@ -45,3 +76,9 @@ export const closeSheets = (page) => page.evaluate(() => document.querySelectorA
 
 /** The tools a request offers: sent in full, or held back by name in load_tools' list (decision 175). */
 export const offeredTools = (req) => (req?.tools || []).flatMap((t) => (t.function.name === 'load_tools' ? [...String(t.function.description || '').matchAll(/^- ([\w-]+):/gm)].map((m) => m[1]) : [t.function.name]));
+
+/** The newest 🩺 timing report with this label, once it is saved in the history (decision 245). */
+export async function timing(page, label, timeout = 20000) {
+  await expect.poll(() => page.evaluate((l) => JSON.parse(localStorage.getItem('ocm.perfHistory') || '[]').some((e) => e.label.startsWith(l)), label), { timeout }).toBe(true);
+  return page.evaluate((l) => JSON.parse(localStorage.getItem('ocm.perfHistory')).find((e) => e.label.startsWith(l)), label);
+}

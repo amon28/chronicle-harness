@@ -162,5 +162,6 @@ export async function syncCcSkills(skills, { exec, dir, skillsDir = SKILLS_DIR, 
     const out = String((await exec(cmd))?.output || '');
     for (const m of out.matchAll(/^@@(WROTE|USER) (\S+)$/gm)) (m[1] === 'WROTE' ? wrote : user).push(m[2]);
   }
-  return { wrote, removed: plan.removed, user, same: plan.same };
+  // need: so the caller can tell a full write from a partial one
+  return { wrote, need: need.map((s) => s.name), removed: plan.removed, user, same: plan.same };
 }

@@ -30,7 +30,7 @@ test('the assistant shows a picture from the workspace under its reply; a missin
       new Promise((res) => {
         const q = indexedDB.open('chronicle');
         q.onsuccess = () => {
-          const r = q.result.transaction('conversations').objectStore('conversations').getAll();
+          const r = globalThis.__ocmChatsReq();
           r.onsuccess = () => res(JSON.stringify(r.result));
         };
       }),

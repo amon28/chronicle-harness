@@ -26,9 +26,9 @@ test('forking copies the chat’s workspace files', async ({ app }) => {
   await send(app, 'hello');
   await app.evaluate(async () => {
     // put a file in this chat's workspace the same way the app stores them
-    const open = () => new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => res(r.result); });
+    const open = () => new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => res(r.result); });
     const db = await open();
-    const convs = await new Promise((res) => { const q = db.transaction('conversations').objectStore('conversations').getAll(); q.onsuccess = () => res(q.result); });
+    const convs = await new Promise((res) => { const q = globalThis.__ocmChatsReq(); q.onsuccess = () => res(q.result); });
     await new Promise((res) => { const t = db.transaction('workspaces', 'readwrite'); t.objectStore('workspaces').put({ id: convs[0].id, files: { 'notes.txt': { data: new TextEncoder().encode('keep me'), mtime: Date.now() } } }); t.oncomplete = res; });
   });
   await app.reload();
@@ -37,7 +37,7 @@ test('forking copies the chat’s workspace files', async ({ app }) => {
   await app.click('.conv-item >> nth=0 >> .conv-more');
   await app.click('#cm-fork');
   await expect.poll(() => app.evaluate(async () => {
-    const db = await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => res(r.result); });
+    const db = await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => res(r.result); });
     const all = await new Promise((res) => { const q = db.transaction('workspaces').objectStore('workspaces').getAll(); q.onsuccess = () => res(q.result); });
     return all.length;
   })).toBe(2);

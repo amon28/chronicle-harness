@@ -186,3 +186,17 @@ describe('ACP client: config options', () => {
     c.close();
   });
 });
+
+describe('the chat so far, for a new Claude Code session (decision 252)', () => {
+  it('keeps much more than before, names roleplay speakers, leaves out replies that never reached it', async () => {
+    const { withEarlierTurns } = await import('../../src/ccmodels.js');
+    const long = Array.from({ length: 300 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ` + 'x'.repeat(400) }));
+    const t = withEarlierTurns(long, 'now');
+    expect(t).toContain('turn 0 '); // ~120,000 characters fit whole (the old cap was 12,000)
+    const rp = withEarlierTurns([{ role: 'user', content: 'Hi' }, { role: 'assistant', content: 'Hello', acpUnsent: true }, { role: 'user', content: 'Again', acpUnsent: true }, { role: 'assistant', content: '*smiles*' }], 'now', undefined, { userName: 'Alex', charName: 'Mira' });
+    expect(rp).toContain('Alex: Hi');
+    expect(rp).toContain('Alex: Again'); // a message of the user that did not reach it is still part of the chat
+    expect(rp).toContain('Mira: *smiles*');
+    expect(rp).not.toContain('Hello'); // the reply that never reached it is not
+  });
+});

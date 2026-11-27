@@ -153,8 +153,26 @@ async function syncOnce(w, convId, { prefer = 'a' } = {}) {
   }
   if (dropped.length && sandbox.convId === w.id) sandbox.remove(dropped);
   const pruned = dropped.length;
-  const r = await reconcile(memorySide(w), diskSide(workDir(convId)), w.shellState, { ...LIMITS, prefer, ignore: fs.shellOnly });
-  saveWorkspace(w);
+  // saved only when this sync changed something (decision 244): a save copies every file of the chat into the
+  // database on the screen's thread – with a few MB of files that froze typing for seconds after every Claude Code
+  // reply and every tool it used, though nothing had changed
+  let dirty = pruned > 0;
+  const mem = memorySide(w);
+  const side = { ...mem, write: (...x) => ((dirty = true), mem.write(...x)), remove: (...x) => ((dirty = true), mem.remove(...x)) };
+  const same = (x, y) => x === y || JSON.stringify(x) === JSON.stringify(y);
+  const state = new Proxy(w.shellState, {
+    set(t, k, v) {
+      if (!(k in t) || !same(t[k], v)) dirty = true;
+      t[k] = v;
+      return true;
+    },
+    deleteProperty(t, k) {
+      if (k in t) dirty = true;
+      delete t[k];
+      return true;
+    },
+  });
+  const r = await reconcile(side, diskSide(workDir(convId)), state, { ...LIMITS, prefer, ignore: fs.shellOnly });
   const notes = [];
   if (pruned) notes.push('dropped the app\'s copy of ' + pruned + ' file' + (pruned === 1 ? '' : 's') + ' under node_modules/.git (they stay in the shell)');
   // said first and in full: a partial scan is the one thing that must not be mistaken for "nothing changed"
@@ -176,6 +194,7 @@ async function syncOnce(w, convId, { prefer = 'a' } = {}) {
   const ex = r.excluded.join('\n');
   if (ex !== (w.shellExcluded || '')) {
     w.shellExcluded = ex;
+    dirty = true;
     if (r.excluded.length) notes.push('not mirrored into the app (they stay in the shell; list_files and read_file do not show them): ' + r.excluded.slice(0, 4).join(', ') + (r.excluded.length > 4 ? ' and ' + (r.excluded.length - 4) + ' more' : ''));
   }
   if (r.revived.length) notes.push('kept ' + r.revived.slice(0, 3).join(', ') + (r.revived.length > 3 ? ' and ' + (r.revived.length - 3) + ' more' : '') + ': deleted on one side but changed on the other since, so the changed copy was put back');
@@ -213,7 +232,8 @@ async function syncOnce(w, convId, { prefer = 'a' } = {}) {
     const rest = r.conflicts.length - said.length;
     notes.push((said.length ? said.join('; ') : 'the two copies of ' + r.conflicts.slice(0, 3).join(', ') + ' disagreed') + (rest > 0 ? ' (and ' + rest + ' more)' : ''));
   }
-  return { ...r, note: notes.join('; ') };
+  if (dirty) saveWorkspace(w);
+  return { ...r, note: notes.join('; '), saved: dirty };
 }
 
 /**

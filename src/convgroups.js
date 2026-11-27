@@ -12,6 +12,16 @@ const midnight = (y, m, d) => new Date(y, m, d).getTime(); // local time: a DST 
  * Days count in local calendar days (Yesterday = the calendar day before today, not "24 hours ago"); a time in the
  * future (another phone's clock) counts as today. Months are used for the last 12 months, years before that.
  */
+// one formatter per kind and language, made once: making one per row cost about a third of drawing the chat list (258)
+const FMT = { my: { month: 'short', year: 'numeric' }, hm: { hour: 'numeric', minute: '2-digit' }, wd: { weekday: 'short' }, dm: { day: 'numeric', month: 'short' } };
+const fmts = new Map();
+function dateFmt(locale, kind) {
+  const key = `${locale || ''}|${kind}`;
+  let f = fmts.get(key);
+  if (!f) fmts.set(key, (f = new Intl.DateTimeFormat(locale, FMT[kind])));
+  return f;
+}
+
 export function timeGroup(t, now = Date.now(), locale) {
   const n = new Date(now);
   const [y, m, d] = [n.getFullYear(), n.getMonth(), n.getDate()];
@@ -20,7 +30,7 @@ export function timeGroup(t, now = Date.now(), locale) {
   const at = new Date(t || 0);
   const monthsAgo = (y - at.getFullYear()) * 12 + (m - at.getMonth());
   if (t > 0 && monthsAgo < 12) {
-    return { key: `m${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}`, label: new Intl.DateTimeFormat(locale, { month: 'short', year: 'numeric' }).format(at) };
+    return { key: `m${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}`, label: dateFmt(locale, 'my').format(at) };
   }
   if (!(t > 0)) return { key: 'y0', label: 'Older' };
   return { key: `y${at.getFullYear()}`, label: String(at.getFullYear()) };
@@ -45,7 +55,7 @@ export function shortTime(t, now = Date.now(), locale) {
   const n = new Date(now);
   const today = midnight(n.getFullYear(), n.getMonth(), n.getDate());
   const at = new Date(t);
-  if (t >= today) return new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' }).format(at);
-  if (t >= midnight(n.getFullYear(), n.getMonth(), n.getDate() - 6)) return new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(at);
-  return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' }).format(at); // the year is in the group's header
+  if (t >= today) return dateFmt(locale, 'hm').format(at);
+  if (t >= midnight(n.getFullYear(), n.getMonth(), n.getDate() - 6)) return dateFmt(locale, 'wd').format(at);
+  return dateFmt(locale, 'dm').format(at); // the year is in the group's header
 }

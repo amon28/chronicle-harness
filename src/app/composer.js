@@ -1,13 +1,15 @@
 // The message box: slash commands, snippets, attachments, and the model picker.
 import { listModels } from '../api.js';
 import { saveSettings, cache } from '../store.js';
-import { readAttachment, fmtBytes, approxTokens } from '../files.js';
+import { readAttachment, fmtBytes, approxTokens, MAX_FILE_BYTES } from '../files.js';
 import { canReadClipboardImages, clipboardHasImage, filesFromBase64, readClipboardImages } from '../clip.js';
 import { isFree, isContributor, replacementFor, trackNewModels } from '../models.js';
 import { DEFAULT_SNIPPETS, applySnippet } from '../snippets.js';
 import { projectCommands } from '../projectfiles.js';
 import { looksText, bytesToText } from '../sandbox.js';
-import { canUseCamera, cameraError, recordVideo, takePhoto, videoAttachment } from '../camera.js';
+import { canUseCamera, cameraError, folderFileAttachment, recordVideo, takePhoto, videoAttachment } from '../camera.js';
+import { canPickForChat, pickForChat } from '../phonefolder.js';
+import { workDir } from '../shellfs.js';
 import { canUseShell } from '../shell.js';
 import { anchorPopover, newChat, openDrawer, openSheet, persist, placeAbove } from './chatlist.js';
 import { $, appMode, chatPersona, convIsRp, currentModel, effortOptions, el, fmtTokens, groupMembers, hooks, isGroup, personas, pref, rpPersonaFlag, state, supportsImages, toast, toolsOn, uid, userName } from './core.js';
@@ -293,7 +295,30 @@ $('#attach-btn').onclick = () => {
   anchorPopover('#compose-menu', () => placeAbove($('#compose-menu .sheet-card'), $('#attach-btn'), 264));
 };
 const closeCompose = () => openSheet('#compose-menu', false);
-$('#cmp-attach').onclick = () => (closeCompose(), $('#file-input').click());
+// one item for any file (decision 262): on the phone its own picker – a file up to the attachment limit is attached as
+// before (a picture stays a picture), a bigger one (a video, a big archive) is copied by Android into the chat's folder
+// in Linux, never through the app's memory, and the message carries where it is. Elsewhere the browser's picker.
+$('#cmp-attach').onclick = async () => {
+  closeCompose();
+  if (!canPickForChat()) return $('#file-input').click();
+  if (!state.current) newChat();
+  const conv = state.current;
+  const mb = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+  try {
+    const got = await pickForChat(`${workDir(conv.id)}/uploads`, { inline: MAX_FILE_BYTES, onProgress: (done, total, name) => toast(`Copying ${name || 'it'} into the chat's folder… ${mb(done)}${total > 0 ? ` of ${mb(total)}` : ''}`, 4000) });
+    if (!got.length || state.current !== conv) return;
+    const small = got.filter((f) => !f.copied).map((f) => new File([f.data], f.name, { type: f.mime || '' }));
+    const big = got.filter((f) => f.copied);
+    for (const f of big) state.pending.push(folderFileAttachment({ name: f.name, size: f.size }, { hasLinux: canUseShell() }));
+    if (big.length) {
+      renderAttachments();
+      toast(`${big.map((f) => `${f.name} (${mb(f.size)})`).join(', ')} ${big.length === 1 ? 'is' : 'are'} in this chat's folder (uploads/)`, 4500);
+    }
+    if (small.length) await attachFiles(small);
+  } catch (e) {
+    toast(e?.message || String(e), 5000);
+  }
+};
 // the camera (decision 229): a photo is attached like a picked picture; a video is recorded into the chat's folder
 $('#cmp-photo').onclick = async () => {
   closeCompose();
@@ -312,8 +337,7 @@ $('#cmp-video').onclick = async () => {
     const v = await recordVideo(state.current.id);
     if (!v) return;
     state.pending.push(videoAttachment(v, { hasLinux: canUseShell() }));
-    renderAttachments();
-    toast(`Recorded ${v.name} – it is in this chat's folder (videos/)`);
+    renderAttachments(); // the chip says it is there: no toast over it (decision 264)
   } catch (e) {
     const why = cameraError(e);
     if (why) toast(why, 4500);
@@ -321,8 +345,6 @@ $('#cmp-video').onclick = async () => {
 };
 $('#cmp-persona').onclick = () => (closeCompose(), hooks.openChatSheet?.());
 $('#cmp-impersonate').onclick = () => (closeCompose(), impersonate());
-$('#cmp-ptest').onclick = () => (closeCompose(), $('#cm-ptest').click());
-$('#cmp-inspect').onclick = () => (closeCompose(), $('#cm-inspect').click());
 $('#file-input').onchange = async (e) => {
   const picked = [...e.target.files];
   e.target.value = '';

@@ -9,7 +9,7 @@ test('a request refused as too long is rebuilt to fit and sent again, and the li
     const messages = [];
     for (let i = 0; i < 30; i++) messages.push(i % 2 ? { role: 'assistant', content: `Answer ${i}. ` + 'words '.repeat(330), personaId: 'general', model: 'glm-5.3', at: t } : { role: 'user', content: `Question ${i}. ` + 'words '.repeat(330), at: t });
     const conv = { id: 'long1', title: 'Long chat', createdAt: t, updatedAt: t, personaId: 'general', messages };
-    await new Promise((res) => { const r = indexedDB.open('chronicle', 3); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
+    await new Promise((res) => { const r = indexedDB.open('chronicle'); r.onsuccess = () => { const tx = r.result.transaction('conversations', 'readwrite'); tx.objectStore('conversations').put(conv); tx.oncomplete = res; }; });
   });
   await app.reload();
   await app.waitForSelector('body[data-ready="1"]');

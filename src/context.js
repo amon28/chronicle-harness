@@ -51,9 +51,21 @@ const TRIM_ERRORS = 3;
 const ERROR_LINE = /\b(error|failed|exception|traceback|exit code [1-9]|TIMED OUT|KILLED|not found|denied)\b/i;
 
 /** A trimmed old result: the head, up to 3 error-like lines from the middle, the tail, and a note. Deterministic; body <= ~900 chars. */
+// the same old results are trimmed again for every request and on every chat opened: each one once (decision 258). Keyed
+// by the result text itself (the chat holds it anyway); a few thousand kept.
+const trimmed = new Map();
+const TRIM_KEEP = 4000;
 export function trimResult(text) {
   const s = String(text ?? '');
   if (s.length <= PRUNE_OVER) return s;
+  const hit = trimmed.get(s);
+  if (hit !== undefined) return hit;
+  const out = trimNow(s);
+  if (trimmed.size >= TRIM_KEEP) trimmed.delete(trimmed.keys().next().value);
+  trimmed.set(s, out);
+  return out;
+}
+function trimNow(s) {
   const evidence = (s.match(/\[surface=[^\]]*\]\s*$/) || [''])[0];
   const body = s.slice(0, s.length - evidence.length).trimEnd();
   const h = body.slice(0, TRIM_HEAD);

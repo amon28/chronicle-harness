@@ -137,7 +137,7 @@ async function pdfToText(file) {
  */
 export async function readAttachment(file, { allowImages }) {
   if (isZip(file)) return readZip(file);
-  if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} is too large (${fmtBytes(file.size)}, max 10 MB)`);
+  if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} is too large to attach (${fmtBytes(file.size)}, max 10 MB) – on the phone, 📎 › Attach a file or image takes any size (a big file goes into the chat's folder)`);
 
   if (isImage(file)) {
     if (!allowImages) throw new Error(`This model can't see images – pick a model with the "vision" badge to send ${file.name}`);
@@ -213,6 +213,7 @@ async function readZip(file) {
 /** How a text attachment is presented to the model inside the user message. */
 export function fileToPrompt(f, toolsOn) {
   if (f.video) return `<video name="${f.name}" info="${f.note || ''}">\n${f.text}\n</video>`; // recorded into the chat's folder (decision 229)
+  if (f.inFolder) return `<file name="${f.name}" info="${f.note || ''}">\n${f.text}\n</file>`; // a big file put in the chat's folder (decision 249)
   if (f.zip) {
     if (toolsOn) return `<archive name="${f.name}" extracted_to="/workspace/${f.folder}/" info="${f.note}">\n${f.listing.split('\n').slice(0, 300).join('\n')}\n</archive>`;
     return `<archive name="${f.name}" info="${f.note}${f.truncated ? ', text truncated' : ''}">\n${f.text || '(no text files)'}\n</archive>`;

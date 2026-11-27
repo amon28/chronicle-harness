@@ -1,3 +1,4 @@
+import { trackSites } from '../perf.js';
 import { setIconPack } from '../icons.js';
 // The Settings sheet and its sub-screens: appearance, saved tools, MCP, OpenCode on PC, custom endpoints,
 // usage history, backup & restore.
@@ -9,7 +10,7 @@ import { renderMarkdown as mdRender, hydrateRich } from '../markdown.js';
 import { cleanOsmUrl } from '../osm.js';
 import { listTools as mcpListTools, setAuthSaver } from '../mcp.js';
 import { signIn, waitRedirect } from '../mcpauth.js';
-import { sandbox, deleteWorkspace } from '../sandbox.js';
+import { sandbox, deleteWorkspace, workspaceSummaries } from '../sandbox.js';
 import { workspaces } from '../store.js';
 import { streamBackup, readBackupFile, applyBackup } from '../backup.js';
 import { usageSummary, clearUsage, chatSpend, sourceSpend, todayTokens } from '../usage.js';
@@ -435,6 +436,7 @@ function readSettingsForm() {
   capturePreset(prefsBefore, samplersBefore); // the roleplay fields belong to the preset being edited
   saveSettings(state.settings);
   applyPrefs();
+  trackSites(pref('perfTrace')); // 🩺 follows the setting at once (decision 247)
   hooks.updateModelUI?.();
   hooks.ccUsagePref?.();
 }
@@ -1187,16 +1189,44 @@ $('#clear-all').onclick = async () => {
 export { openSettings, openUsageHistory, setPage, showSettingsPage };
 
 // ---------- storage: what's using space, and cleanup ----------
-const byteSize = (o) => new Blob([typeof o === 'string' ? o : JSON.stringify(o)]).size;
+/**
+ * About how many bytes a saved object takes, without turning it into text: its strings, numbers and binary data, walked
+ * (decision 258 – the text of every chat at once froze the page for seconds with a lot saved).
+ */
+export function approxSize(o, seen = new Set()) {
+  if (o == null) return 0;
+  const t = typeof o;
+  if (t === 'string') return o.length;
+  if (t === 'number' || t === 'boolean') return 8;
+  if (t !== 'object' || seen.has(o)) return 0;
+  if (ArrayBuffer.isView(o) || o instanceof ArrayBuffer) return o.byteLength;
+  seen.add(o);
+  let n = 0;
+  if (Array.isArray(o)) for (const v of o) n += approxSize(v, seen) + 1;
+  else for (const k in o) n += k.length + 4 + approxSize(o[k], seen);
+  return n;
+}
+const breath = () => new Promise((r) => setTimeout(r, 0));
 async function renderStorage() {
   const box = $('#storage-view');
   box.hidden = false;
   box.innerHTML = '';
   box.append(el('p', 'hint', 'Measuring…'));
-  const [convs, wss, arts, est] = await Promise.all([conversations.all(), workspaces.all(), art.all().catch(() => ({})), navigator.storage?.estimate?.().catch(() => null)]);
-  const chats = convs.map((c) => ({ c, bytes: byteSize(c) })).sort((a, b) => b.bytes - a.bytes);
+  // the chats as the app has them, sized a few at a time so the page stays responsive; the files from the workspace index
+  // (count and size per chat) – not every chat and every file read from the database at once (decision 258)
+  await hooks.loadAllMessages?.(); // the chats whose messages are not loaded yet (decision 260)
+  const [wss, arts, est] = await Promise.all([workspaceSummaries().catch(() => []), art.all().catch(() => ({})), navigator.storage?.estimate?.().catch(() => null)]);
+  const convs = [...state.convs];
+  const chats = [];
+  for (let i = 0; i < convs.length; i++) {
+    chats.push({ c: convs[i], bytes: approxSize(convs[i]) });
+    if (i % 10 === 9) await breath();
+  }
+  if (!box.isConnected || box.hidden) return;
+  chats.sort((a, b) => b.bytes - a.bytes);
+  const byId = new Map(convs.map((c) => [c.id, c]));
   const files = wss
-    .map((w) => ({ id: w.id, c: convs.find((c) => c.id === w.id), count: Object.keys(w.files || {}).length, bytes: Object.values(w.files || {}).reduce((n, f) => n + (f.data?.byteLength || f.data?.length || 0), 0) }))
+    .map((w) => ({ id: w.id, c: byId.get(w.id), count: w.n || 0, bytes: w.size || 0 }))
     .filter((x) => x.count)
     .sort((a, b) => b.bytes - a.bytes);
   const arts2 = Object.entries(arts)
@@ -1204,7 +1234,7 @@ async function renderStorage() {
     .map(([id, url]) => ({ id, p: state.settings.personas.find((p) => p.id === id), bytes: Math.round(url.length * 0.75) }))
     .sort((a, b) => b.bytes - a.bytes);
   const sum = (l) => l.reduce((n, x) => n + x.bytes, 0);
-  const settingsBytes = byteSize(state.settings);
+  const settingsBytes = approxSize(state.settings);
   box.innerHTML = '';
   const total = sum(chats) + sum(files) + sum(arts2) + settingsBytes;
   box.append(el('p', 'hint', `About ${fmtBytes(total)} in total${est?.usage ? ` (the phone reports ${fmtBytes(est.usage)} used by the app's storage)` : ''}.`));

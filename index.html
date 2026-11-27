@@ -696,7 +696,8 @@
           <h3 class="section">Storage</h3>
           <button id="storage-show" class="ghost-btn block">📦 What's using space?</button>
           <button id="errlog-open" class="ghost-btn block">🧾 Error log <span id="errlog-count" class="dim"></span></button>
-          <label class="toggle"><input id="pref-perf" type="checkbox" /> <span>🩺 Show timings after each send <span class="dim">(to find what makes the app slow)</span></span></label>
+          <label class="toggle"><input id="pref-perf" type="checkbox" /> <span>🩺 Measure timings after each send and while typing <span class="dim">(to find what makes the app slow)</span></span></label>
+          <button id="perf-open" class="ghost-btn block">🩺 Timing history <span id="perf-count" class="dim"></span></button>
           <div id="storage-view" class="storage-view" hidden></div>
           <h3 class="section">Usage</h3>
           <label class="toggle"><input id="pref-go-usage" type="checkbox" /> <span>Show Go usage meter in the side menu</span></label>
@@ -848,6 +849,21 @@
           <button id="errlog-copy" class="ghost-btn small">Copy</button>
           <button id="errlog-export" class="ghost-btn small">Export</button>
           <button id="errlog-clear" class="ghost-btn small danger-text">Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="perf-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🩺 Timing history</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="hint">What each measurement found, newest first: after a send, or while you typed. Tap one for the full report. Only on this phone; the newest 30 are kept.</p>
+        <div id="perf-list" class="errlog-list"></div>
+        <div class="row gap-sm wrap">
+          <button id="perf-copy-all" class="ghost-btn small">Copy all</button>
+          <button id="perf-clear" class="ghost-btn small danger-text">Clear</button>
         </div>
       </div>
     </div>
@@ -1255,8 +1271,6 @@
           <button id="cmp-video" class="menu-item cm-item" hidden><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg><span class="cm-label">Record a video</span></button>
           <button id="cmp-persona" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg><span class="cm-label">Change persona</span></button>
           <button id="cmp-impersonate" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L17 4l3 3L8 19z"/></svg><span class="cm-label">Write my next message</span></button>
-          <button id="cmp-ptest" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/></svg><span class="cm-label">Prompt test</span></button>
-          <button id="cmp-inspect" class="menu-item cm-item"><svg class="cm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span class="cm-label">Inspect the prompt</span></button>
         </div>
       </div>
     </div>

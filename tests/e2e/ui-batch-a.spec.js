@@ -78,7 +78,8 @@ test('the chat menu is a short popover with a More section, and the message-box 
   // the paperclip menu
   await app.click('#attach-btn');
   await expect(app.locator('#compose-menu')).toHaveClass(/open/);
-  await expect(app.locator('#compose-menu .cm-item:visible')).toHaveCount(5);
+  // attach, change persona, write my next message – the prompt test and inspector are in the chat's ⋮ (decision 262)
+  await expect(app.locator('#compose-menu .cm-item:visible')).toHaveCount(3);
 });
 
 test('the menu in the side list only has what you do to a chat in the list', async ({ app }) => {

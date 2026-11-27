@@ -12,6 +12,18 @@ const hash32 = (s) => {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
   return (h >>> 0).toString(36);
 };
+// a message's indexed text and key, worked out once (and again when it changes): the index check went over every
+// message of every chat every 30 s, and each search did it again (decision 258)
+const chunked = new WeakMap();
+function chunkOf(m) {
+  const sig = [m.content, m.rounds, m.rounds?.length, m.at, m.hidden, m.greeting, m.streaming, m.error];
+  const h = chunked.get(m);
+  if (h && h.sig.every((v, i) => v === sig[i])) return h;
+  const text = chunkText(m);
+  const out = { sig, text, key: text ? keyOf(m, text) : '' };
+  chunked.set(m, out);
+  return out;
+}
 /** What of a message is worth indexing (its text and its tool rounds' text), or '' when too short. */
 export function chunkText(m) {
   if (!m || m.hidden || m.greeting || m.streaming || m.error) return '';
@@ -24,16 +36,28 @@ export const keyOf = (m, text) => `${m.at || 0}:${hash32(text)}`;
  * Embed up to `budget` messages that have no vector yet, newest chats first.
  * store: { get(convId) → {chunks:{key:vec}} | null, put(convId, idx) }, embed(texts, 'document') → vectors.
  */
+// the chats whose index was complete, as they were then (time of their last change, message count): skipped until they
+// change (decision 258)
+// (and the length of their text, for an edit not saved yet), per index
+const completeOf = new WeakMap();
+const stateOf = (c) => {
+  let n = 0;
+  for (const m of c.messages || []) n += (m.content?.length || 0) + (m.rounds?.length || 0);
+  return `${c.updatedAt || 0}:${c.messages?.length || 0}:${n}`;
+};
 export async function indexChats(convs, { store, embed, budget = 24 }) {
   let done = 0;
-  const list = [...(convs || [])].filter((c) => c.messages?.length).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  let complete = completeOf.get(store);
+  if (!complete) completeOf.set(store, (complete = new Map()));
+  const list = [...(convs || [])].filter((c) => c.messages?.length && complete.get(c.id) !== stateOf(c)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   for (const c of list) {
     if (done >= budget) break;
+    const was = stateOf(c);
     const idx = (await store.get(c.id)) || { chunks: {} };
     const want = new Map();
     for (const m of c.messages) {
-      const t = chunkText(m);
-      if (t) want.set(keyOf(m, t), t);
+      const { text: t, key } = chunkOf(m);
+      if (t) want.set(key, t);
     }
     let changed = false;
     for (const k of Object.keys(idx.chunks)) if (!want.has(k)) (delete idx.chunks[k], (changed = true)); // deleted or edited
@@ -46,6 +70,7 @@ export async function indexChats(convs, { store, embed, budget = 24 }) {
       changed = true;
     }
     if (changed) await store.put(c.id, idx);
+    if ([...want.keys()].every((k) => idx.chunks[k]) && stateOf(c) === was) complete.set(c.id, was);
   }
   return done;
 }
@@ -57,10 +82,10 @@ export async function indexProgress(convs, store) {
   for (const c of convs || []) {
     const idx = (await store.get(c.id)) || { chunks: {} };
     for (const m of c.messages || []) {
-      const t = chunkText(m);
+      const { text: t, key } = chunkOf(m);
       if (!t) continue;
       total++;
-      if (idx.chunks[keyOf(m, t)]) indexed++;
+      if (idx.chunks[key]) indexed++;
     }
   }
   return { indexed, total };
@@ -72,8 +97,8 @@ async function scored(c, qv, store) {
   if (!idx) return [];
   const out = [];
   c.messages.forEach((m, i) => {
-    const t = chunkText(m);
-    const v = t && idx.chunks[keyOf(m, t)];
+    const { text: t, key } = chunkOf(m);
+    const v = t && idx.chunks[key];
     if (v) out.push({ i, score: cosine(qv, decodeVec(v)), text: t });
   });
   return out.sort((a, b) => b.score - a.score);

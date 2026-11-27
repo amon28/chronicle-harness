@@ -1,4 +1,4 @@
-import { test, expect, send, lastRequest, closeSheets } from './helpers.js';
+import { test, expect, send, timing, lastRequest, closeSheets } from './helpers.js';
 
 test('sends a message and streams a rendered reply', async ({ app, request }) => {
   await send(app, 'hello there');
@@ -88,13 +88,23 @@ test('the stylesheet is linked in the page head (no flash of an unstyled page wh
 
 test.describe('timings', () => {
   test.use({ appSettings: { prefs: { perfTrace: true } } });
-  test('🩺 shows what happened after pressing send', async ({ app }) => {
+  test('🩺 keeps what happened after pressing send in the timing history, with nothing over the chat', async ({ app }) => {
     await send(app, 'hello');
-    const r = app.locator('.perf-report');
-    await expect(r).toBeVisible({ timeout: 10000 });
-    await expect(r).toContainText('your message drawn');
-    await expect(r).toContainText('prompt built');
-    await expect(r).toContainText('first words arrived');
+    const r = await timing(app, 'After pressing send');
+    expect(r.text).toContain('your message drawn');
+    expect(r.text).toContain('prompt built');
+    expect(r.text).toContain('first words arrived');
+    expect(r.line).toBeTruthy();
+    expect(await app.locator('.perf-report').count()).toBe(0);
+    // Settings › Data › Timing history: newest first, the newest open, each with Copy
+    await app.evaluate(() => document.querySelector('#perf-open').click());
+    await expect(app.locator('#perf-sheet.open')).toHaveCount(1);
+    const first = app.locator('#perf-list .perf-item').first();
+    await expect(first).toContainText('After pressing send');
+    await expect(first.locator('.perf-text')).toContainText('first words arrived');
+    await expect(first.locator('button', { hasText: 'Copy' })).toBeVisible();
+    await app.click('#perf-clear');
+    await expect(app.locator('#perf-list')).toContainText('Nothing yet');
   });
 });
 
