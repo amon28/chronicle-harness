@@ -83,12 +83,13 @@ test.describe('while a reply streams', () => {
         const d = Object.getOwnPropertyDescriptor(Element.prototype, prop);
         Object.defineProperty(Element.prototype, prop, {
           ...d,
+          // only the app's own code (its bundle under /assets/): Playwright's trace recorder reads every element's scroll
           get() {
-            if (globalThis.__count && this.closest?.('details:not([open])')) globalThis.__hidden++;
+            if (globalThis.__count && this.closest?.('details:not([open])') && /\/assets\//.test(new Error().stack)) globalThis.__hidden++;
             return d.get.call(this);
           },
           set(v) {
-            if (globalThis.__count && this.closest?.('details:not([open])')) globalThis.__hidden++;
+            if (globalThis.__count && this.closest?.('details:not([open])') && /\/assets\//.test(new Error().stack)) globalThis.__hidden++;
             return d.set.call(this, v);
           },
         });
