@@ -1,6 +1,6 @@
 /* Python sandbox: Pyodide (CPython compiled to WebAssembly) in a Web Worker.
  * It has its own in-memory filesystem with the chat's files under /workspace,
- * no access to the app, the phone's storage or your API key.
+ * no access to the app, the phone's storage or your API key (lockDown below: decision 273).
  * Messages in:  {type:'init', indexURL, files:[{path,data,mode?,exec?}]}
  *               {type:'write', files:[{path,data,mode?,exec?}]} | {type:'delete', paths:[]}
  *               {type:'run', id, code}
@@ -144,11 +144,89 @@ function sigOf(path) {
   }
 }
 
+// What Python can reach of JavaScript (decision 273). This worker runs on the app's own origin, so with Pyodide's
+// default (`js` = globalThis) a script could open js.indexedDB – every chat, the settings – or send anything anywhere
+// with js.fetch. Two layers: Python's `js` module is a short list (what Pyodide's own Python code imports from it:
+// timers for asyncio, the fetch classes for pyodide.http/micropip, a few constructors), and – because any JS object
+// leads to the Function constructor (js.Object.constructor('return self')()) – the worker itself is stripped of
+// storage and network after Pyodide has loaded: no IndexedDB, Cache Storage, OPFS, BroadcastChannel, XHR, WebSocket,
+// EventSource, nested workers or importScripts, and fetch only downloads packages (Pyodide's own from indexURL,
+// micropip's from PyPI) with GET. What is left: import() of a remote script (syntax, not a global – only a CSP header
+// on this file could stop it); with the storage gone, it can carry nothing but the chat's own files, which Python has
+// by design.
+const realFetch = typeof self.fetch === 'function' ? self.fetch.bind(self) : null;
+const PACKAGE_HOSTS = ['pypi.org', 'files.pythonhosted.org'];
+function packageUrl(url, indexURL) {
+  let u;
+  try {
+    u = new URL(String(url), indexURL);
+  } catch {
+    return false;
+  }
+  if (u.username || u.password) return false;
+  if (indexURL && u.href.startsWith(indexURL)) return true;
+  return u.protocol === 'https:' && PACKAGE_HOSTS.includes(u.hostname);
+}
+function packageFetch(indexURL) {
+  return function fetch(input, init) {
+    const isReq = typeof Request === 'function' && input instanceof Request;
+    const url = isReq ? input.url : String(input);
+    const method = String((init && init.method) || (isReq ? input.method : '') || 'GET').toUpperCase();
+    if (!realFetch || (method !== 'GET' && method !== 'HEAD') || !packageUrl(url, indexURL))
+      return Promise.reject(new TypeError(`Python cannot reach ${url.slice(0, 80)} – the sandbox only downloads packages (Pyodide's and PyPI's).`));
+    return realFetch(input, { ...(init || {}), credentials: 'omit' });
+  };
+}
+function pythonGlobals(indexURL) {
+  const g = Object.create(null);
+  const names = ['Object', 'Array', 'ArrayBuffer', 'DataView', 'Uint8Array', 'Uint8ClampedArray', 'Int8Array', 'Uint16Array', 'Int16Array', 'Uint32Array', 'Int32Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array', 'Date', 'Map', 'Set', 'WeakRef', 'JSON', 'Math', 'Number', 'String', 'Boolean', 'Symbol', 'BigInt', 'Error', 'TypeError', 'Promise', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'AbortController', 'AbortSignal', 'Request', 'Response', 'Headers', 'URL', 'URLSearchParams', 'TextEncoder', 'TextDecoder', 'Blob', 'console', 'performance'];
+  for (const n of names) if (self[n] !== undefined) g[n] = typeof self[n] === 'function' && /^[a-z]/.test(n) ? self[n].bind(self) : self[n];
+  g.fetch = packageFetch(indexURL);
+  return g;
+}
+const CUT = ['indexedDB', 'caches', 'cookieStore', 'XMLHttpRequest', 'WebSocket', 'WebSocketStream', 'EventSource', 'WebTransport', 'BroadcastChannel', 'Worker', 'SharedWorker', 'importScripts'];
+const CUT_NAV = ['storage', 'locks', 'serviceWorker'];
+function strip(obj, name) {
+  for (let o = obj; o; o = Object.getPrototypeOf(o))
+    if (Object.prototype.hasOwnProperty.call(o, name))
+      try {
+        delete o[name];
+      } catch {
+        /* not configurable: shadowed below */
+      }
+}
+function cut(obj, name) {
+  strip(obj, name);
+  if (obj[name] !== undefined)
+    try {
+      Object.defineProperty(obj, name, { value: undefined, writable: false, configurable: false });
+    } catch {
+      /* left as it is */
+    }
+}
+function lockDown(indexURL) {
+  for (const n of CUT) cut(self, n);
+  if (self.navigator) for (const n of CUT_NAV) cut(self.navigator, n);
+  // Pyodide's loader calls the global fetch for each package: it gets the package-only one, which nothing can replace
+  strip(self, 'fetch');
+  const guarded = packageFetch(indexURL);
+  try {
+    Object.defineProperty(self, 'fetch', { value: guarded, writable: false, configurable: false });
+  } catch {
+    self.fetch = guarded;
+  }
+  // fail closed: a browser where something could not be taken away gets no Python rather than an open one
+  const left = [...CUT.filter((n) => self[n] !== undefined), ...(self.navigator ? CUT_NAV.filter((n) => self.navigator[n] !== undefined) : [])];
+  if (self.fetch !== guarded) left.push('fetch');
+  if (left.length) throw new Error(`Python could not be shut off from ${left.join(', ')} – it does not run here.`);
+}
+
 async function init(indexURL, files) {
   self.postMessage({ type: 'status', text: 'Loading Python…' });
   // module worker: Pyodide 314+ no longer supports classic workers
   const { loadPyodide } = await import(indexURL + 'pyodide.mjs');
-  pyodide = await loadPyodide({ indexURL });
+  pyodide = await loadPyodide({ indexURL, jsglobals: pythonGlobals(indexURL) });
+  lockDown(indexURL);
   mkdirp(ROOT);
   pyodide.FS.chdir(ROOT);
   writeFiles(files || []);

@@ -529,6 +529,16 @@ http
         }
         return say('Calendar: ' + tools[0].content.split('\n')[0]);
       }
+      // the assistant changes a roleplay persona's greetings (decision 265)
+      if (/GREETLIA/.test(JSON.stringify(msgs.filter((x) => x.role === 'user').at(-1)?.content || '')) && offered(jb, 'edit_persona')) {
+        const tools = msgs.slice(msgs.map((x) => x.role).lastIndexOf('user')).filter((x) => x.role === 'tool');
+        if (!tools.length) {
+          send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_ep', type: 'function', function: { name: 'edit_persona', arguments: JSON.stringify({ persona: 'Lia', set: { greeting: '*looks up from her spellbook* Welcome to my tower.' }, add_greetings: ['*adjusts her hat* Oh, a visitor.'] }) } }] } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+          return done();
+        }
+        return say('Edited: ' + tools[0].content.split('\n')[0]);
+      }
       // the assistant makes a roleplay preset (decision 261)
       if (/MAKEPRESET/.test(JSON.stringify(msgs.filter((x) => x.role === 'user').at(-1)?.content || '')) && offered(jb, 'roleplay_presets')) {
         const tools = msgs.slice(msgs.map((x) => x.role).lastIndexOf('user')).filter((x) => x.role === 'tool');

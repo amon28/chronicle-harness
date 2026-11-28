@@ -12,6 +12,37 @@ const MAX_FILE = 60000; // characters per file handed to the helper
 const MAX_TOTAL = 150000;
 
 /** One line per model for the helper's "model" choice: id, name, price and what it can do. */
+/**
+ * A model of the user's from what a model (or a project agent file) called it (decision 267): its exact id or name, in
+ * any case; the id without the provider in front ("claude-opus-5-5" for "anthropic:claude-opus-5-5"); the name or id
+ * with spaces, dots and dashes ignored ("Claude Opus 5.5"); or words that fit one model only ("opus 5.5").
+ * → { id } when one fits, { candidates: [model…] } when several do, {} when none.
+ */
+export function findModel(models = [], q = '') {
+  const want = String(q || '').trim();
+  if (!want) return {};
+  const low = want.toLowerCase();
+  const flat = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const tail = (id) => String(id).replace(/^.*[:/]/, '');
+  const one = (list) => (list.length === 1 ? { id: list[0].id } : list.length ? { candidates: list } : null);
+  return (
+    one(models.filter((m) => m.id === want)) ||
+    one(models.filter((m) => m.id.toLowerCase() === low || String(m.name || '').toLowerCase() === low)) ||
+    one(models.filter((m) => tail(m.id).toLowerCase() === tail(low))) ||
+    one(models.filter((m) => flat(tail(m.id)) === flat(tail(want)) || flat(m.name) === flat(want))) ||
+    one(
+      models.filter((m) => {
+        // words split at spaces only – "5.5" stays one (split at its dot, "opus 5.5" also fit Opus 5)
+        const words = low.split(/[\s:/,()]+/).filter((w) => w.length > 0 && !['the', 'model', 'use'].includes(w));
+        const hay = `${m.id} ${m.name || ''}`.toLowerCase();
+        const hayFlat = flat(hay);
+        return words.length > 0 && words.every((w) => hay.includes(w) || hayFlat.includes(flat(w)));
+      }),
+    ) ||
+    {}
+  );
+}
+
 export function modelLines(models = []) {
   return models.slice(0, 40).map((m) => {
     const c = m.cost?.text;
@@ -40,10 +71,9 @@ export function delegateDefs(agents = [], models = [], helper = '') {
   if (models.length) {
     d[0].function.parameters.properties.model = {
       type: 'string',
-      // every model of the user's is allowed; with more than 40 the list would be too long for a choice, so it is the
-      // first 40 described and any other id taken as it is (it used to be a choice of the first 40 only – decision 214)
-      ...(models.length <= 40 ? { enum: models.map((m) => m.id) } : {}),
-      description: `Leave out for the user's helper model${helper ? ` (${helper})` : ''} - right for most jobs. Name one only when the job needs it: a stronger model for hard reasoning or code, one that sees images, a bigger context. These ids are also what a project agent file's "model:" takes. Available${models.length > 40 ? ` (40 of ${models.length}; any other id of theirs works too)` : ''}:\n${modelLines(models).join('\n')}`,
+      // no fixed list of values (decision 267): its id, its name or words that fit one model are all taken (findModel) –
+      // a provider that checks a list refused "Claude Opus 5.5" before the app could match it
+      description: `Leave out for the user's helper model${helper ? ` (${helper})` : ''} - right for most jobs. Name one when the user asks for it, or the job needs it: a stronger model for hard reasoning or code, one that sees images, a bigger context. Give its id from this list (its name works too). These ids are also what a project agent file's "model:" takes. Available${models.length > 40 ? ` (40 of ${models.length}; any other of theirs works too)` : ''}:\n${modelLines(models).join('\n')}`,
     };
   }
   // the project's own named agents (.chronicle/agents/*.md): their prompt, tools and model come from the file
@@ -55,6 +85,7 @@ export function delegateDefs(agents = [], models = [], helper = '') {
 }
 
 export const delegatePrompt = () =>
+  '- When the user asks for another model by name ("ask Claude Opus", "have GPT check this", "use Haiku for this"), call delegate with model set to it – its id from the delegate tool\'s list, or the name the user used; never say you do not have that model before you have tried. Pass on what it says (and that it was that model).\n' +
   '- For a bulky side job (summarising a long file, going through many items, a first draft, researching one question, a self-contained script), call delegate: a helper agent does it and returns only the result, so your context stays small. Give it a complete task and the files it needs. Write each task as a brief: objective, scope and sources, output format and length, and what is already ruled out. One helper for a single question, 2-4 for comparisons; give it tools="read" to research or read, tools="full" to also run code and write files. Independent research questions can go to several read helpers in the same step – they run side by side.';
 
 const dec = new TextDecoder();

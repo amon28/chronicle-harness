@@ -53,18 +53,36 @@ function call(msg, handlers) {
   };
 }
 
+const LOCAL_BUDGET = 9000;
+const flat = (m) => ({ role: m.role === 'tool' ? 'user' : m.role, content: typeof m.content === 'string' ? m.content : (m.content || []).map((p) => p.text || '').join('\n') });
+
+/**
+ * What the on-device model gets: small models choke on long prompts, so about 9,000 characters. The system message
+ * (messages[0]) is always kept – cut to the budget if it alone is longer – and the rest is filled from the newest
+ * turns back; the kept history never starts on an assistant turn. It used to walk newest-first and stop at the
+ * budget before reaching the system message, so a long chat lost its persona and instructions (decision 275).
+ */
+export function trimLocalMessages(messages) {
+  const all = (messages || []).map(flat);
+  const sys = all[0]?.role === 'system' ? { ...all[0] } : null;
+  if (sys && sys.content.length > LOCAL_BUDGET) sys.content = sys.content.slice(0, LOCAL_BUDGET);
+  const rest = sys ? all.slice(1) : all;
+  let size = sys ? sys.content.length : 0;
+  const kept = [];
+  for (let i = rest.length - 1; i >= 0; i--) {
+    const len = rest[i].content.length;
+    if (kept.length && size + len > LOCAL_BUDGET) break;
+    kept.unshift(rest[i]);
+    size += len;
+  }
+  while (kept.length > 1 && kept[0].role === 'assistant') kept.shift();
+  return sys ? [sys, ...kept] : kept;
+}
+
 /** Same shape as streamChat's handlers: onContent, onDone, onError. Returns { cancel }. */
 export function streamLocal({ messages, temperature }, handlers, onProgress) {
   let cancelled = false;
-  // keep the prompt short: system + the last turns that fit about 3000 characters... small models choke on long prompts
-  const trimmed = [];
-  let size = 0;
-  for (const m of [...messages].reverse()) {
-    const len = typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length;
-    if (trimmed.length && size + len > 9000 && m.role !== 'system') break;
-    trimmed.unshift({ role: m.role === 'tool' ? 'user' : m.role, content: typeof m.content === 'string' ? m.content : (m.content || []).map((p) => p.text || '').join('\n') });
-    size += len;
-  }
+  const trimmed = trimLocalMessages(messages);
   if (globalThis.__ocmLocalLLM) {
     Promise.resolve(globalThis.__ocmLocalLLM(trimmed, (t) => !cancelled && handlers.onContent?.(t)))
       .then(() => !cancelled && handlers.onDone?.('stop', {}))

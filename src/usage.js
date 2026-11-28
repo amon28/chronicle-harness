@@ -1,5 +1,7 @@
 // Local usage log: tokens per day and model, for every request the app makes
 // (chat replies, tool steps, memory, titles, compaction…). Stored in localStorage, ~90 days.
+import { isFree } from './models.js';
+
 const KEY = 'ocm.usageLog';
 const KEEP_DAYS = 90;
 
@@ -15,6 +17,19 @@ function load() {
     return {};
   }
 }
+
+/**
+ * A model's price per million tokens, and whether one is known (decision 275). A model with no price (a custom
+ * endpoint that lists none, one no longer in the list) counted as $0 – the usage view now says "price unknown" for it.
+ * Free ones, the on-device model and Claude Code (the subscription) are known to cost nothing per token.
+ */
+export function modelPrice(models, id) {
+  const m = (models || []).find((x) => x.id === id);
+  const p = m?.cost?.text || {};
+  const known = typeof p.input?.price === 'number' || typeof p.output?.price === 'number' || /^(local|cc):/.test(String(id || '')) || m?.source === 'local' || m?.source === 'claudecode' || (!!m && isFree(m));
+  return { p, known };
+}
+const tokenValue = (p, x) => ((x.in - (x.cached || 0)) * (p.input?.price || 0) + (x.cached || 0) * (p.input?.cache?.read ?? p.input?.price ?? 0) + x.out * (p.output?.price || 0)) / 1e6;
 
 const CHATS_KEY = 'ocm.usageChats';
 const SESSION_SUFFIX = /-(memory|title|compact|group|story|vision|helper|lore|card-edit|tidy|episode|tracker|correct|polish|delegate|btw|advisor)$/;
@@ -106,19 +121,19 @@ export function sourceSpend(models, days = 30) {
   } catch {
     all = {};
   }
-  const price = (id) => models.find((m) => m.id === id)?.cost?.text || {};
   const from = dayKey(Date.now() - (days - 1) * 864e5);
   const out = {};
   for (const [d, srcs] of Object.entries(all)) {
     if (d < from) continue;
     for (const [src, byModel] of Object.entries(srcs)) {
-      const r = (out[src] ||= { src, name: sourceName(src), in: 0, out: 0, reqs: 0, value: 0 });
+      const r = (out[src] ||= { src, name: sourceName(src), in: 0, out: 0, reqs: 0, value: 0, unpriced: false });
       for (const [model, x] of Object.entries(byModel)) {
-        const p = price(model);
+        const { p, known } = modelPrice(models, model);
         r.in += x.in;
         r.out += x.out;
         r.reqs += x.reqs;
-        r.value += ((x.in - x.cached) * (p.input?.price || 0) + x.cached * (p.input?.cache?.read ?? p.input?.price ?? 0) + x.out * (p.output?.price || 0)) / 1e6;
+        r.value += tokenValue(p, x);
+        if (!known && x.in + x.out) r.unpriced = true;
       }
     }
   }
@@ -153,21 +168,19 @@ export function recordUsage(model, usage, kind = 'chat', chatId = '', source = '
 /** { days: [{day, in, out, reqs, value}], models: [{model, in, out, reqs, value}], totals: {today, week, month} } */
 export function usageSummary(models, days = 30) {
   const log = load();
-  const price = (id) => models.find((m) => m.id === id)?.cost?.text || {};
-  const value = (id, x) => {
-    const p = price(id);
-    return ((x.in - (x.cached || 0)) * (p.input?.price || 0) + (x.cached || 0) * (p.input?.cache?.read ?? p.input?.price ?? 0) + x.out * (p.output?.price || 0)) / 1e6;
-  };
+  const value = (id, x) => tokenValue(modelPrice(models, id).p, x);
+  const unknown = (id, x) => !modelPrice(models, id).known && x.in + x.out > 0;
   const list = [];
   for (let i = days - 1; i >= 0; i--) {
     const k = dayKey(Date.now() - i * 864e5);
     const day = log[k] || {};
-    const row = { day: k, in: 0, out: 0, reqs: 0, value: 0 };
+    const row = { day: k, in: 0, out: 0, reqs: 0, value: 0, unpriced: false };
     for (const [id, x] of Object.entries(day)) {
       row.in += x.in;
       row.out += x.out;
       row.reqs += x.reqs;
       row.value += value(id, x);
+      if (unknown(id, x)) row.unpriced = true;
     }
     list.push(row);
   }
@@ -182,8 +195,11 @@ export function usageSummary(models, days = 30) {
       t.reqs += x.reqs;
     }
   }
-  for (const t of Object.values(byModel)) t.value = value(t.model, t);
-  const sum = (rows) => rows.reduce((a, r) => ({ in: a.in + r.in, out: a.out + r.out, reqs: a.reqs + r.reqs, value: a.value + r.value }), { in: 0, out: 0, reqs: 0, value: 0 });
+  for (const t of Object.values(byModel)) {
+    t.value = value(t.model, t);
+    t.unpriced = unknown(t.model, t);
+  }
+  const sum = (rows) => rows.reduce((a, r) => ({ in: a.in + r.in, out: a.out + r.out, reqs: a.reqs + r.reqs, value: a.value + r.value, unpriced: a.unpriced || r.unpriced }), { in: 0, out: 0, reqs: 0, value: 0, unpriced: false });
   return {
     days: list,
     models: Object.values(byModel).sort((a, b) => b.in + b.out - (a.in + a.out)),
@@ -200,16 +216,16 @@ export const todayKey = dayKey;
 
 /** Per chat, biggest first: [{ id, in, out, reqs, value, t }]. */
 export function chatSpend(models) {
-  const price = (id) => models.find((m) => m.id === id)?.cost?.text || {};
   const rows = [];
   for (const [id, c] of Object.entries(loadChats())) {
-    const r = { id, in: 0, out: 0, reqs: 0, value: 0, t: c.t };
+    const r = { id, in: 0, out: 0, reqs: 0, value: 0, t: c.t, unpriced: false };
     for (const [model, x] of Object.entries(c.models)) {
-      const p = price(model);
+      const { p, known } = modelPrice(models, model);
       r.in += x.in;
       r.out += x.out;
       r.reqs += x.reqs;
-      r.value += ((x.in - x.cached) * (p.input?.price || 0) + x.cached * (p.input?.cache?.read ?? p.input?.price ?? 0) + x.out * (p.output?.price || 0)) / 1e6;
+      r.value += tokenValue(p, x);
+      if (!known && x.in + x.out) r.unpriced = true;
     }
     rows.push(r);
   }

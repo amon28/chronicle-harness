@@ -10,7 +10,7 @@ test.describe('saved tools in Ask-first mode', () => {
     await app.locator('#perm-options .menu-item[data-perm="ask"]').click();
     await app.fill('#input', 'DOCALLS [["tool_wipe",{}]]');
     await app.click('#send-btn');
-    await expect(app.locator('#ask-question')).toContainText('Allow tool_wipe', { timeout: 8000 });
+    await expect(app.locator('#ask-question')).toContainText('Allow the saved tool “wipe”', { timeout: 8000 });
     await app.locator('#ask-options button', { hasText: 'Deny' }).click();
     await idle(app);
     const reqs = await requests(request);

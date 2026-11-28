@@ -90,8 +90,9 @@ test('📎 › Attach a file or image: a 150 MB video goes into the chat folder 
   const last = req.messages.at(-1);
   const text = (Array.isArray(last.content) ? last.content.filter((p) => p.type === 'text').map((p) => p.text).join('\n') : last.content);
   expect(text).toContain('<video name="birthday trip.mp4" info="video, 150 MB, in the chat\'s folder">');
-  expect(text).toContain('/workspace/uploads/birthday trip.mp4');
-  expect(text).toContain('ffmpeg');
+  // Linux is installed but this chat has no shell tool: the note says so instead of pointing at a shell it cannot use (decision 275)
+  expect(text).toContain("in this chat's folder on the phone as uploads/birthday trip.mp4");
+  expect(text).toContain('this chat has no shell tool');
 });
 
 test('without the phone (the browser\'s picker) a big file is refused, saying the phone takes any size', async ({ app }) => {

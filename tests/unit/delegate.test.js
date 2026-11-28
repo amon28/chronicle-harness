@@ -53,7 +53,7 @@ import { delegateDefs as defsWithModels } from '../../src/delegate.js';
 describe('delegate: choosing a model', () => {
   it('lists the models the helper can be', () => {
     const d = defsWithModels([], [{ id: 'kimi-k3', name: 'Kimi K3', limit: { context: 256000 }, cost: { text: { input: { price: 0.6 }, output: { price: 2.5 } } } }, { id: 'tiny', capabilities: { tools: { supported: false } } }], 'DeepSeek Flash')[0].function.parameters.properties.model;
-    expect(d.enum).toEqual(['kimi-k3', 'tiny']);
+    expect(d.enum).toBeUndefined(); // no fixed list: names are taken too (decision 267)
     expect(d.description).toContain('- kimi-k3 (Kimi K3): 256K context, $0.6/$2.5 per M');
     expect(d.description).toContain('- tiny: no tools');
     expect(d.description).toContain('DeepSeek Flash');
@@ -73,12 +73,12 @@ describe('delegate: which model ran', () => {
 });
 
 describe('delegate with many models (decision 214)', () => {
-  it('up to 40: a choice of them; more: any id is taken, and the description says so', () => {
+  it('up to 40 described; more: the first 40, any other is taken, and the description says so', () => {
     const few = Array.from({ length: 3 }, (_, i) => ({ id: `m${i}` }));
-    expect(defsWithModels([], few)[0].function.parameters.properties.model.enum).toEqual(['m0', 'm1', 'm2']);
+    expect(defsWithModels([], few)[0].function.parameters.properties.model.description).toContain('- m2');
     const many = Array.from({ length: 92 }, (_, i) => ({ id: `m${i}` }));
     const p = defsWithModels([], many)[0].function.parameters.properties.model;
     expect(p.enum).toBeUndefined();
-    expect(p.description).toMatch(/40 of 92; any other id of theirs works too/);
+    expect(p.description).toMatch(/40 of 92; any other of theirs works too/);
   });
 });

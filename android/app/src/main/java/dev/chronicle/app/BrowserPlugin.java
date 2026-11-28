@@ -19,6 +19,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -37,6 +38,18 @@ public class BrowserPlugin extends Plugin {
 
     /** One browser per chat: each has its own WebView, page and screen state. Cookies (sign-ins) are shared by Android. */
     private static class Sess {
+        /** Requests the app refused because they went to a local address (decision 268), said at the next look. */
+        final java.util.List<String> refused = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        /** The chat's allowed local addresses, set when a page at one of them was opened (empty otherwise). */
+        volatile java.util.Set<String> lanAllow = java.util.Collections.emptySet();
+        /** The host of the page shown now (set as it starts loading): a local address is reached only from one of them. */
+        volatile String mainHost = "";
+        /**
+         * What the page in use wrote to its console, as Android reports it (decision 273): from its first line, before the
+         * app's page script is in (a dev server's or a deployed site's errors at load were missed), with file:line.
+         * Since the page started; at most CONSOLE_MAX, the oldest dropped.
+         */
+        final java.util.ArrayDeque<JSObject> console = new java.util.ArrayDeque<>();
         long pumpUntil;
         boolean pumping;
         Bitmap pump;
@@ -242,6 +255,38 @@ public class BrowserPlugin extends Plugin {
         });
         w.setWebChromeClient(new android.webkit.WebChromeClient() {
             @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
+                if (w != s.web || m == null) return false;
+                String level;
+                switch (m.messageLevel()) {
+                    case ERROR:
+                        level = "error";
+                        break;
+                    case WARNING:
+                        level = "warn";
+                        break;
+                    case DEBUG:
+                    case TIP:
+                        level = "debug";
+                        break;
+                    default:
+                        level = "log";
+                }
+                JSObject e = new JSObject();
+                e.put("t", level);
+                String msg = String.valueOf(m.message());
+                e.put("m", msg.length() > 400 ? msg.substring(0, 400) : msg);
+                String src = m.sourceId() == null ? "" : m.sourceId();
+                if (src.length() > 160) src = "…" + src.substring(src.length() - 159);
+                if (!src.isEmpty()) e.put("at", src + ":" + m.lineNumber());
+                synchronized (s.console) {
+                    s.console.addLast(e);
+                    while (s.console.size() > CONSOLE_MAX) s.console.removeFirst();
+                }
+                return false;
+            }
+
+            @Override
             public boolean onCreateWindow(WebView v, boolean isDialog, boolean isUserGesture, android.os.Message resultMsg) {
                 return openWindow(s, resultMsg);
             }
@@ -338,7 +383,14 @@ public class BrowserPlugin extends Plugin {
                 String host = r.getUrl().getHost();
                 if (isSiteHost(host) && s.siteRoot != null) return false; // a link inside the served workspace
                 if (s.loopback && isLoopback(host)) return false;
-                return isPrivateHost(host); // the assistant's browser never goes to your LAN
+                // the assistant's browser never goes to your LAN – and says so (a dropped link left no trace, decision 268);
+                // an address the chat was allowed is gone to, but never by a redirect (decision 271)
+                if (isPrivateHost(host) && s.lanAllow.contains(host) && (!r.isRedirect() || s.lanAllow.contains(hostOf(v.getUrl())))) return false;
+                if (isPrivateHost(host)) {
+                    noteRefused(s, "link to " + u);
+                    return true;
+                }
+                return false;
             }
 
             @Override
@@ -357,8 +409,17 @@ public class BrowserPlugin extends Plugin {
                     return plain(404, "The workspace is not being served (open the page again)");
                 }
                 if (s.loopback && isLoopback(host)) return null;
-                // the page may load things from the internet, but never from your network or this phone
-                if (isPrivateHost(host) && !"preview.invalid".equals(host)) {
+                // the page may load things from the internet, but never from your network or this phone – also not through a
+                // name that points there (router.lan, a vendor's name for its router: only the typed address was checked,
+                // decision 268). This runs off the screen's thread, so the name can be looked up; the answer is kept a minute.
+                if ("preview.invalid".equals(host)) return null;
+                if (r.isForMainFrame()) leaveLan(s, host);
+                // the chat's allowed local address – while the page shown is one of them (a public page reached from there
+                // may not load it); the page itself came through shouldOverrideUrlLoading or open
+                if (s.lanAllow.contains(host) && (r.isForMainFrame() || s.lanAllow.contains(s.mainHost))) return null;
+                String why = isPrivateHost(host) ? "a local address" : resolvesPrivate(host, s.loopback);
+                if (why != null) {
+                    noteRefused(s, (r.isForMainFrame() ? "page " : "frame or file ") + r.getUrl() + " (" + why + ")");
                     return new android.webkit.WebResourceResponse("text/plain", "utf-8", 403, "Blocked", new java.util.HashMap<>(), new java.io.ByteArrayInputStream(new byte[0]));
                 }
                 return null;
@@ -366,6 +427,11 @@ public class BrowserPlugin extends Plugin {
 
             @Override
             public void onPageStarted(WebView v, String url, Bitmap icon) {
+                s.mainHost = hostOf(url) == null ? "" : hostOf(url);
+                leaveLan(s, s.mainHost);
+                if (v == s.web) synchronized (s.console) {
+                    s.console.clear(); // a new page: its own console, like the page script's log
+                }
                 if (v == s.web) s.mainError = null;
             }
 
@@ -567,6 +633,51 @@ public class BrowserPlugin extends Plugin {
         }
     }
 
+    private static String hostOf(String url) {
+        try {
+            return android.net.Uri.parse(url).getHost();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * The page left the chat's allowed local addresses for another site (decision 273): the grant ends for this browser.
+     * Only an HTTP redirect back was refused before, so a public page reached from the local one could send the browser
+     * back there with a script, a meta refresh or a form POST (none of which is a redirect). Going back needs action
+     * open with the address again, which brings the chat's list along; moving between allowed addresses keeps it.
+     */
+    private static void leaveLan(Sess s, String host) {
+        if (host == null || host.isEmpty() || s.lanAllow.isEmpty() || s.lanAllow.contains(host)) return;
+        s.lanAllow = java.util.Collections.emptySet();
+    }
+
+    private static void noteRefused(Sess s, String what) {
+        if (s.refused.size() < 12 && !s.refused.contains(what)) s.refused.add(what);
+    }
+
+    // name → why it is refused ("" = it is public), and when that was looked up
+    private static final java.util.concurrent.ConcurrentHashMap<String, Object[]> resolved = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Why a host NAME is refused – it points to a local address – or null when it is public. Literal addresses pass. */
+    static String resolvesPrivate(String host, boolean loopbackOk) {
+        if (host == null || host.isEmpty()) return null;
+        if (host.startsWith("[") || host.matches("^[0-9.]+$")) return null; // a literal public address: nothing to look up
+        String key = host.toLowerCase() + (loopbackOk ? "|lo" : "");
+        Object[] hit = resolved.get(key);
+        long now = System.currentTimeMillis();
+        if (hit != null && now - (Long) hit[1] < 60_000) return "".equals(hit[0]) ? null : (String) hit[0];
+        String why = "";
+        try {
+            String a = privateTarget(new java.net.URL("http://" + host + "/"), loopbackOk);
+            if (a != null && !"unresolvable host".equals(a)) why = host + " points to " + a + ", a local address";
+        } catch (Exception ignored) {
+        }
+        if (resolved.size() > 500) resolved.clear();
+        resolved.put(key, new Object[] { why, now });
+        return why.isEmpty() ? null : why;
+    }
+
     private static boolean isPrivateHost(String host) {
         if (host == null) return true;
         String h = host.toLowerCase();
@@ -607,6 +718,18 @@ public class BrowserPlugin extends Plugin {
         s.siteRoot = call.getString("root", null);
         s.inject = call.getString("inject", null);
         s.loopback = call.getBoolean("loopback", false);
+        // the exact local addresses this chat was allowed (decision 271): only when the page opened is one of them
+        java.util.Set<String> lan = new java.util.HashSet<>();
+        try {
+            JSArray la = call.getArray("lanAllow");
+            if (la != null) for (int i = 0; i < la.length(); i++) if (la.getString(i).matches("^[0-9.]+$")) lan.add(la.getString(i));
+        } catch (Exception ignored) {
+        }
+        try {
+            s.lanAllow = lan.contains(new java.net.URL(url).getHost()) ? lan : java.util.Collections.emptySet();
+        } catch (Exception e) {
+            s.lanAllow = java.util.Collections.emptySet();
+        }
         getActivity().runOnUiThread(() -> {
             try {
                 ensure(s, w, h, mobile);
@@ -939,6 +1062,22 @@ public class BrowserPlugin extends Plugin {
         });
     }
 
+    private static final int CONSOLE_MAX = 200;
+
+    /** The page's console as Android saw it (decision 273): { clear? } → { messages: [{ t, m, at }] }. */
+    @PluginMethod
+    public void console(final PluginCall call) {
+        final Sess s = sessions.get(call.getString("id", "main"));
+        JSArray out = new JSArray();
+        if (s != null) synchronized (s.console) {
+            for (JSObject e : s.console) out.put(e);
+            if (call.getBoolean("clear", false)) s.console.clear();
+        }
+        JSObject r = new JSObject();
+        r.put("messages", out);
+        call.resolve(r);
+    }
+
     @PluginMethod
     public void status(final PluginCall call) {
         // asking must not create a page (it would count towards the limit of open pages)
@@ -966,6 +1105,14 @@ public class BrowserPlugin extends Plugin {
             if (s.chooserAsked != null) {
                 r.put("chooser", s.chooserAsked);
                 s.chooserAsked = null;
+            }
+            synchronized (s.refused) {
+                if (!s.refused.isEmpty()) {
+                    JSArray ref = new JSArray();
+                    for (String x : s.refused) ref.put(x);
+                    r.put("refused", ref);
+                    s.refused.clear();
+                }
             }
             call.resolve(r);
         });

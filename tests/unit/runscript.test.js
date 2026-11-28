@@ -1,18 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import vm from 'node:vm';
-import { runScript, scriptDocument, SCRIPT_BLOCKED } from '../../src/runscript.js';
+import { runScript, scriptDocument, SCRIPT_BLOCKED, frameChannel } from '../../src/runscript.js';
 import { isWriteCall, planAnswer, runProposePlan, changeList, agentsInstructions, APPROVE, REJECT } from '../../src/planmode.js';
 import { lineDiff, collapseDiff } from '../../src/diff.js';
 
-/** Runs the sandbox page's script in a Node VM: the same code the iframe runs, with postMessage both ways. */
-function vmRunner(doc, onMessage) {
+/** Runs the sandbox page's script in a Node VM: the same code the iframe runs, with the same hello → MessagePort
+ *  handshake as the app (frameChannel), so everything after the hello goes through the port. */
+function vmRunner(doc, onMessage, token) {
   const js = /<script>([\s\S]*)<\/script>/.exec(doc)[1];
-  const listeners = [];
-  const parent = { postMessage: (m) => setTimeout(() => onMessage(m), 0) };
-  const sandbox = { parent, setTimeout, addEventListener: (_t, f) => listeners.push(f), Proxy, Promise, JSON, String, Map, Object };
+  const inFrame = [];
+  const atHost = [];
+  const on = (list) => (_t, f) => _t === 'message' && list.push(f);
+  const off = (list) => (_t, f) => list.includes(f) && list.splice(list.indexOf(f), 1);
+  const contentWindow = { postMessage: (m, _o, ports) => setTimeout(() => inFrame.slice().forEach((f) => f({ data: m, source: parent, ports: ports || [] })), 0) };
+  const parent = { postMessage: (m) => setTimeout(() => atHost.slice().forEach((f) => f({ data: m, source: contentWindow })), 0) };
+  const win = { addEventListener: on(atHost), removeEventListener: off(atHost) };
+  const ch = frameChannel({ contentWindow }, { tag: '__script', token, onMessage, onLeft: () => onMessage({ __script: token, type: 'left' }), win });
+  const sandbox = { parent, setTimeout, addEventListener: on(inFrame), removeEventListener: off(inFrame), Proxy, Promise, JSON, String, Map, Object };
   vm.createContext(sandbox);
   vm.runInContext(js, sandbox);
-  return { post: (m) => setTimeout(() => listeners.forEach((f) => f({ data: m, source: parent })), 0), stop: () => {} };
+  return { post: ch.post, stop: ch.close };
 }
 
 describe('run_script', () => {

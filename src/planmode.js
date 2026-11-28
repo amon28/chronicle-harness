@@ -6,7 +6,7 @@ import { mcpReadOnly } from './mcphints.js';
 const fn = (name, description, properties, required = []) => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } });
 
 // tools that change something: blocked while a plan waits for approval
-export const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'delete_file', 'move_file', 'run_python', 'shell', 'shell_job', 'phone_write', 'phone_delete', 'phone_import', 'pc_write', 'pc_import', 'pc_shell', 'save_tool', 'save_mod', 'save_skill', 'edit_skill', 'save_persona', 'save_character', 'save_lorebook', 'edit_persona', 'edit_lorebook', 'manage_mod', 'ralph_loop', 'schedule_task', 'browser', 'claude_code']);
+export const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'delete_file', 'move_file', 'run_python', 'shell', 'shell_job', 'phone_write', 'phone_delete', 'phone_import', 'pc_write', 'pc_edit', 'pc_import', 'pc_shell', 'save_tool', 'save_mod', 'save_skill', 'edit_skill', 'save_persona', 'save_character', 'save_lorebook', 'edit_persona', 'edit_lorebook', 'manage_mod', 'ralph_loop', 'schedule_task', 'browser', 'claude_code']);
 const writesFor = (name, args) => {
   if (name === 'delegate') return String(args?.tools || 'none') === 'full';
   if (name === 'shortcuts') return !['list', 'read'].includes(String(args?.action || 'list'));

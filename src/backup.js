@@ -8,13 +8,17 @@ import { deleteWorkspace } from './sandbox.js';
 import { isClaudeSignInCopy } from './claudesecrets.js';
 
 const SECRET_KEYS = ['apiKey', 'exaKey', 'ghToken', 'microlinkKey', 'githubToken', 'githubRefresh', 'githubSshKey'];
-/** Settings without any key or token: the top-level ones, each provider's key, each MCP server's token and sign-in. */
+/**
+ * Settings without any key or token: the top-level ones, each provider's key, each MCP server's token, sign-in, extra
+ * headers (where an API key goes) and the secret of its local bridge (decision 273: those two were exported as they
+ * were).
+ */
 export function withoutSecrets(s) {
   SECRET_KEYS.forEach((k) => delete s[k]);
   if (Array.isArray(s.providers)) s.providers = s.providers.map((p) => ({ ...p, apiKey: '', adminKey: '' }));
   if (Array.isArray(s.mcpServers))
     s.mcpServers = s.mcpServers.map((m) => {
-      const { token: _t, oauth: _o, ...rest } = m; // the sign-in (access + refresh token) is a key too
+      const { token: _t, oauth: _o, headers: _h, bridgeSecret: _b, ...rest } = m; // the sign-in (access + refresh token) is a key too
       return rest;
     });
   // a PC agent's bridge secret; the phone's own Claude Code agent never stores one (claudecode.js)
@@ -23,6 +27,7 @@ export function withoutSecrets(s) {
   return s;
 }
 export const BACKUP_VERSION = 1;
+const freshSecret = () => [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('');
 
 const STORED = /\.(png|jpe?g|gif|webp|avif|zip|gz|7z|mp3|m4a|mp4|webm|pdf|woff2?)$/i; // already compressed: don't spend time on them
 const CHUNK = 1024 * 1024;
@@ -306,6 +311,8 @@ export async function applyBackup({ data, ws, art: artFiles = {}, extra = null, 
     const pcOf = new Map((current.pcFiles || []).map((a) => [a.id, a.secret]));
     if (Array.isArray(settings.pcFiles)) settings.pcFiles = settings.pcFiles.map((a) => (a.secret || !pcOf.get(a.id) ? a : { ...a, secret: pcOf.get(a.id) }));
     settings.mcpServers = (settings.mcpServers || []).map((m) => (m.token || m.oauth || !mcpOf.get(m.id) ? m : { ...m, ...(mcpOf.get(m.id).token ? { token: mcpOf.get(m.id).token } : {}), ...(mcpOf.get(m.id).oauth ? { oauth: mcpOf.get(m.id).oauth } : {}) }));
+    // the headers too (decision 273) – unless the backup has its own
+    settings.mcpServers = settings.mcpServers.map((m) => (m.headers || !mcpOf.get(m.id)?.headers ? m : { ...m, headers: mcpOf.get(m.id).headers }));
     // every chat goes: its shell copy and its line in the Files page's index too (a restored chat of the same id
     // would otherwise get the old shell files back with its first command)
     for (const id of await workspaces.ids()) await deleteWorkspace(id);
@@ -327,6 +334,12 @@ export async function applyBackup({ data, ws, art: artFiles = {}, extra = null, 
       if (!settings[k] && b[k]) settings[k] = b[k];
     });    // edited prompts: keep yours, add any you haven't changed
     if (b.prompts) settings.prompts = { ...b.prompts, ...(current.prompts || {}) };
+  }
+  // a local (stdio) MCP server's bridge secret is not in a backup without keys (decision 273): the one on this phone
+  // stays, or the server gets a new one (it is only between the app and the bridge it starts)
+  if (Array.isArray(settings.mcpServers)) {
+    const bridgeOf = new Map((current.mcpServers || []).map((m) => [m.id, m.bridgeSecret]));
+    settings.mcpServers = settings.mcpServers.map((m) => (m.transport !== 'stdio' || m.bridgeSecret ? m : { ...m, bridgeSecret: bridgeOf.get(m.id) || freshSecret() }));
   }
   const existing = new Map((await conversations.all()).map((c) => [c.id, c]));
   let added = 0;

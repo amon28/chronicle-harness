@@ -2,8 +2,11 @@
 // Pure functions: they take what read_persona returns and give back only what changes.
 import { applyEdits } from './codeedit.js';
 
-export const CARD_FIELDS = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'system_prompt', 'post_history_instructions', 'creator_notes', 'alternate_greetings', 'tags'];
-export const PERSONA_FIELDS = ['name', 'description', 'prompt', 'emoji'];
+export const CARD_FIELDS = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'system_prompt', 'post_history_instructions', 'depth_prompt', 'creator_notes', 'alternate_greetings', 'tags'];
+// a persona that is not a full card still has a greeting and alternate greetings when it is used for roleplay (decision 265)
+export const PERSONA_FIELDS = ['name', 'description', 'prompt', 'emoji', 'greeting', 'alternate_greetings'];
+const LISTS = ['alternate_greetings', 'tags'];
+const NOT_TEXT = [...LISTS, 'emoji'];
 
 /**
  * cur: read_persona's result. args: { set, edits, add_greetings, remove_greetings }.
@@ -15,16 +18,19 @@ export function planPersonaEdit(cur, args) {
   const set = args.set && typeof args.set === 'object' ? args.set : {};
   const bad = Object.keys(set).filter((k) => !allowed.includes(k));
   if (bad.length) throw new Error(`Unknown field${bad.length > 1 ? 's' : ''} ${bad.join(', ')} for a ${isChar ? 'character' : 'chat persona'} – use ${allowed.join(', ')}`);
-  const target = isChar ? { ...(cur.card || {}) } : { name: cur.name, description: cur.description || '', prompt: cur.prompt || '' };
+  const target = isChar ? { ...(cur.card || {}) } : { name: cur.name, description: cur.description || '', prompt: cur.prompt || '', greeting: cur.greeting || '', alternate_greetings: [...(cur.alternate_greetings || [])] };
+  // the character's note (depth prompt) is edited as text; its depth and role stay as they were
+  const depth = isChar ? cur.card?.depth_prompt || null : null;
+  if (isChar) target.depth_prompt = depth?.prompt || '';
   const changed = [];
   for (const [k, v] of Object.entries(set)) {
-    target[k] = k === 'alternate_greetings' || k === 'tags' ? (Array.isArray(v) ? v.map(String) : [String(v)]) : String(v ?? '');
+    target[k] = LISTS.includes(k) ? (Array.isArray(v) ? v.map(String) : [String(v)]) : String(v ?? '');
     changed.push(k);
   }
   const byField = new Map();
   for (const e of Array.isArray(args.edits) ? args.edits : []) {
     const f = e.field || (isChar ? 'description' : 'prompt');
-    if (!allowed.includes(f) || f === 'alternate_greetings' || f === 'tags' || f === 'emoji') throw new Error(`edits can change a text field (${allowed.filter((x) => !['alternate_greetings', 'tags', 'emoji'].includes(x)).join(', ')}), not "${f}"`);
+    if (!allowed.includes(f) || NOT_TEXT.includes(f)) throw new Error(`edits can change a text field (${allowed.filter((x) => !NOT_TEXT.includes(x)).join(', ')}), not "${f}"`);
     if (!byField.has(f)) byField.set(f, []);
     byField.get(f).push(e);
   }
@@ -33,17 +39,24 @@ export function planPersonaEdit(cur, args) {
     target[f] = text;
     changed.push(`${f} (${replaced} edit${replaced === 1 ? '' : 's'})`);
   }
-  if (isChar) {
-    const add = (Array.isArray(args.add_greetings) ? args.add_greetings : []).map(String).filter((g) => g.trim());
-    const rm = new Set((Array.isArray(args.remove_greetings) ? args.remove_greetings : []).map(Number).filter((n) => n >= 1));
-    if (add.length || rm.size) {
-      const alt = (target.alternate_greetings || []).filter((_, i) => !rm.has(i + 1));
-      target.alternate_greetings = [...alt, ...add];
-      if (add.length) changed.push(`+${add.length} greeting${add.length === 1 ? '' : 's'}`);
-      if (rm.size) changed.push(`−${rm.size} greeting${rm.size === 1 ? '' : 's'}`);
-    }
+  // extra greetings (swipes on the first message) – a character's and a roleplay persona's alike
+  const add = (Array.isArray(args.add_greetings) ? args.add_greetings : []).map(String).filter((g) => g.trim());
+  const rm = new Set((Array.isArray(args.remove_greetings) ? args.remove_greetings : []).map(Number).filter((n) => n >= 1));
+  if (add.length || rm.size) {
+    const had = target.alternate_greetings || [];
+    const missing = [...rm].filter((n) => n > had.length);
+    if (missing.length) throw new Error(`There ${had.length === 1 ? 'is' : 'are'} ${had.length} extra greeting${had.length === 1 ? '' : 's'} – no number ${missing.join(', ')} to remove (read_persona lists them)`);
+    target.alternate_greetings = [...had.filter((_, i) => !rm.has(i + 1)), ...add];
+    if (add.length) changed.push(`+${add.length} greeting${add.length === 1 ? '' : 's'}`);
+    if (rm.size) changed.push(`−${rm.size} greeting${rm.size === 1 ? '' : 's'}`);
   }
-  if (!changed.length && args.tools == null && !Array.isArray(args.toolset) && !Array.isArray(args.add_tools) && !Array.isArray(args.remove_tools)) throw new Error('Nothing to change: give set, edits, add_greetings/remove_greetings, tools, toolset, add_tools or remove_tools');
+  if (!changed.length && args.image == null && args.tools == null && !Array.isArray(args.toolset) && !Array.isArray(args.add_tools) && !Array.isArray(args.remove_tools))
+    throw new Error('Nothing to change: give set, edits, add_greetings/remove_greetings, image, tools, toolset, add_tools or remove_tools');
+  if (isChar) {
+    const text = target.depth_prompt;
+    if (text.trim() || depth) target.depth_prompt = { depth: depth?.depth ?? 4, role: depth?.role || 'system', ...(depth || {}), prompt: text };
+    else delete target.depth_prompt;
+  }
   return isChar ? { persona: null, card: target, changed } : { persona: target, card: null, changed };
 }
 

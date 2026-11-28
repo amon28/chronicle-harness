@@ -31,6 +31,7 @@ export const CC_TOOLS = new Set([
   'pc_read',
   'pc_import',
   'pc_write',
+  'pc_edit',
   'pc_shell',
   'pc_job',
   'android_intent',
@@ -76,7 +77,7 @@ export function mcpToolList(defs) {
 }
 
 /** The chat's switches for Claude Code's sake: tools off → none; no shell/Python/delegate (Claude Code has its own). The creator tools follow the chat's switch (decision 250). */
-export const ccEnabled = (enabled, toolsOn) => (toolsOn ? { ...enabled, shell: false, python: false, delegate: false, modAuthor: false, advisor: false, planMode: false, claudecode: false, skills: [], vision: true } : null);
+export const ccEnabled = (enabled, toolsOn) => (toolsOn ? { ...enabled, noLan: true, shell: false, python: false, delegate: false, modAuthor: false, advisor: false, planMode: false, claudecode: false, skills: [], vision: true } : null);
 
 // ---------- Claude Code calls Chronicle's models (decision 167) ----------
 /** Tools Chronicle adds for Claude Code beyond CC_TOOLS: a helper on one of the user's models, and the list of them. */

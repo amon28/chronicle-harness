@@ -58,7 +58,7 @@ describe('creator tools', () => {
     const ctx = mkCtx();
     expect((await runCreatorTool('list_personas', {}, ctx)).result).toContain('persona-maker · Persona Maker · persona · built-in');
     expect((await runCreatorTool('read_persona', { persona: 'Persona Maker' }, ctx)).result).toContain('You are the Persona Maker');
-    await expect(runCreatorTool('read_persona', { persona: 'Nobody' }, ctx)).rejects.toThrow('list_personas');
+    await expect(runCreatorTool('read_persona', { persona: 'Nobody' }, ctx)).rejects.toThrow('No persona or character called "Nobody". There are: Persona Maker (persona-maker); Vega (p_mira).');
   });
   it('updates an existing (even built-in) persona in place instead of copying it', async () => {
     const ctx = mkCtx();
@@ -125,6 +125,19 @@ describe('creator tools', () => {
     expect(r2.result).toContain('now has 2 entries');
     expect(c2.calls.find((c) => c[0] === 'lore')[2].map((e) => e.content)).toEqual(['Very salty.', 'Two moons.']);
   });
+  it('a name that fits several is answered with them; a change says when it shows; a long read is cut with a marker (decision 270)', async () => {
+    const ctx = mkCtx('Change it');
+    await expect(runCreatorTool('read_persona', { persona: 'Both' }, ctx)).rejects.toThrow('"Both" fits several: Mira A; Mira B. Use the exact name or the id.');
+    ctx.creator.read = () => ({ id: 'p_mira2', name: 'Mira', character: true, card: { name: 'Mira', description: 'She is 25.', first_mes: 'Hi.' } });
+    ctx.creator.edit = async () => {};
+    const r = await runCreatorTool('edit_persona', { persona: 'Mira', set: { first_mes: 'Welcome back.' } }, ctx);
+    expect(r.result).toMatch(/When it shows: the greetings are used by chats started from now on \(a chat already going keeps the first message it opened with\)\.$/);
+    const d = await runCreatorTool('edit_persona', { persona: 'Mira', edits: [{ old_text: '25', new_text: '40' }] }, ctx);
+    expect(d.result).toMatch(/When it shows: the rest applies to every chat with it from its next reply\.$/);
+    ctx.creator.read = () => ({ id: 'p', name: 'Long', prompt: 'x'.repeat(30000) });
+    const long = await runCreatorTool('read_persona', { persona: 'Long' }, ctx);
+    expect(long.result).toMatch(/\n… \[cut: \d+ more characters – ask for one field/);
+  });
   it('edit_persona delete asks and refuses built-ins; edit_lorebook delete asks', async () => {
     const ctx = mkCtx('Delete it');
     ctx.creator.read = (q) => (q === 'Persona Maker' ? { id: 'persona-maker', name: 'Persona Maker', builtin: true } : { id: 'p9', name: 'Old', character: true, card: {} });
@@ -137,5 +150,32 @@ describe('creator tools', () => {
     ctx.creator.removeLorebook = async (id) => ctx.calls.push(['rmlb', id]);
     await runCreatorTool('edit_lorebook', { lorebook: 'World', delete: true }, ctx);
     expect(ctx.calls).toContainEqual(['rmlb', 'lb1']);
+  });
+});
+
+// Decision 266: read_persona can show the assistant the persona's picture (card art, else avatar)
+describe('read_persona with its picture', async () => {
+  const { runCreatorTool } = await import('../../src/creatortools.js');
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const creator = (pic) => ({ read: () => ({ id: 'p1', name: 'Lia', character: true, card: { name: 'Lia' } }), picture: async () => pic });
+  const shrinkImage = async (bytes) => `shrunk:${bytes.length}`;
+  it('a model that can see pictures gets the card art as an image', async () => {
+    const r = await runCreatorTool('read_persona', { persona: 'Lia', picture: true }, { creator: creator({ url: png, kind: 'card art' }), vision: true }, { shrinkImage });
+    expect(r.images).toEqual([{ path: 'Lia – card art', url: 'shrunk:70' }]);
+    expect(r.result).toContain('is shown to you in the next message');
+  });
+  it('a model that cannot gets it described by one that can', async () => {
+    const asked = [];
+    const describeImages = async (imgs, q) => (asked.push([imgs, q]), { text: 'Long silver hair, a wide white witch hat.', model: 'kimi-k3' });
+    const r = await runCreatorTool('read_persona', { persona: 'Lia', picture: true }, { creator: creator({ url: png, kind: 'avatar' }), vision: false, describeImages }, { shrinkImage });
+    expect(r.images).toBeUndefined();
+    expect(r.result).toContain('described by kimi-k3');
+    expect(r.result).toContain('wide white witch hat');
+    expect(asked[0][0][0].path).toBe('Lia – avatar');
+  });
+  it('one with only an emoji avatar says so; without picture: true it is the text alone', async () => {
+    expect((await runCreatorTool('read_persona', { persona: 'Lia', picture: true }, { creator: creator(null), vision: true }, { shrinkImage })).result).toContain('has no picture');
+    const plain = await runCreatorTool('read_persona', { persona: 'Lia' }, { creator: creator({ url: png, kind: 'card art' }), vision: true }, { shrinkImage });
+    expect(plain.images).toBeUndefined();
   });
 });

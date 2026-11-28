@@ -10,9 +10,9 @@ import { looksText, bytesToText } from '../sandbox.js';
 import { canUseCamera, cameraError, folderFileAttachment, recordVideo, takePhoto, videoAttachment } from '../camera.js';
 import { canPickForChat, pickForChat } from '../phonefolder.js';
 import { workDir } from '../shellfs.js';
-import { canUseShell } from '../shell.js';
+import { canUseShell, shellStatus } from '../shell.js';
 import { anchorPopover, newChat, openDrawer, openSheet, persist, placeAbove } from './chatlist.js';
-import { $, appMode, chatPersona, convIsRp, currentModel, effortOptions, el, fmtTokens, groupMembers, hooks, isGroup, personas, pref, rpPersonaFlag, state, supportsImages, toast, toolsOn, uid, userName } from './core.js';
+import { $, appMode, chatPersona, convIsRp, currentModel, effortOptions, el, enabledTools, fmtTokens, groupMembers, hooks, isGroup, personas, pref, rpPersonaFlag, state, supportsImages, toast, toolsOn, uid, userName } from './core.js';
 import { avatarEl } from '../personas.js';
 import { autoGrow, impersonate, input, send } from './engine.js';
 import { modHost } from './modhost.js';
@@ -295,6 +295,17 @@ $('#attach-btn').onclick = () => {
   anchorPopover('#compose-menu', () => placeAbove($('#compose-menu .sheet-card'), $('#attach-btn'), 264));
 };
 const closeCompose = () => openSheet('#compose-menu', false);
+/**
+ * What the note on a file in the chat's folder may promise (decision 275): canUseShell() only says the Linux plugin is
+ * there – Linux may not be installed, and the chat may not have the shell tool (Settings › Tools & agent, tools on).
+ * → { hasLinux, shellOn }
+ */
+async function linuxReach(conv) {
+  if (!canUseShell()) return { hasLinux: false, shellOn: false };
+  const st = await shellStatus().catch(() => null);
+  const hasLinux = !!st?.installed;
+  return { hasLinux, shellOn: hasLinux && toolsOn(conv) && !!enabledTools(conv).shell };
+}
 // one item for any file (decision 262): on the phone its own picker – a file up to the attachment limit is attached as
 // before (a picture stays a picture), a bigger one (a video, a big archive) is copied by Android into the chat's folder
 // in Linux, never through the app's memory, and the message carries where it is. Elsewhere the browser's picker.
@@ -309,7 +320,8 @@ $('#cmp-attach').onclick = async () => {
     if (!got.length || state.current !== conv) return;
     const small = got.filter((f) => !f.copied).map((f) => new File([f.data], f.name, { type: f.mime || '' }));
     const big = got.filter((f) => f.copied);
-    for (const f of big) state.pending.push(folderFileAttachment({ name: f.name, size: f.size }, { hasLinux: canUseShell() }));
+    const reach = big.length ? await linuxReach(conv) : null;
+    for (const f of big) state.pending.push(folderFileAttachment({ name: f.name, size: f.size }, reach));
     if (big.length) {
       renderAttachments();
       toast(`${big.map((f) => `${f.name} (${mb(f.size)})`).join(', ')} ${big.length === 1 ? 'is' : 'are'} in this chat's folder (uploads/)`, 4500);
@@ -336,7 +348,7 @@ $('#cmp-video').onclick = async () => {
   try {
     const v = await recordVideo(state.current.id);
     if (!v) return;
-    state.pending.push(videoAttachment(v, { hasLinux: canUseShell() }));
+    state.pending.push(videoAttachment(v, { hasLinux: (await linuxReach(state.current)).hasLinux }));
     renderAttachments(); // the chip says it is there: no toast over it (decision 264)
   } catch (e) {
     const why = cameraError(e);
@@ -356,7 +368,8 @@ export async function attachFiles(picked) {
   renderAttachments();
   for (const f of picked) {
     try {
-      state.pending.push(await readAttachment(f, { allowImages: supportsImages(currentModel()) }));
+      // a binary data file is refused only in a chat without tools: with them it goes to the workspace (decision 275)
+      state.pending.push(await readAttachment(f, { allowImages: supportsImages(currentModel()), tools: !state.current || toolsOn(state.current) }));
     } catch (err) {
       errors.push(err.message || `Could not read ${f.name}`);
     }
@@ -494,6 +507,7 @@ function updateModelUI() {
   const cur = here?.decides ? here.effort : state.settings.effort?.[m?.id];
   eb.textContent = `🧠 ${opts.includes(cur) ? cur : 'default'}`;
   hooks.updatePresetChip?.();
+  hooks.toolsChanged?.(); // the tools chip says when this model cannot use tools (decision 275)
 }
 hooks.updateModelUI = () => updateModelUI();
 // the chat's start screen names the same model as the header (not the app-wide default a Claude Code or preset chat does not use)

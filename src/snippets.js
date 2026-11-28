@@ -11,26 +11,36 @@ export const DEFAULT_SNIPPETS = [
   { id: 's_continue', cmd: 'continue', title: 'Continue', text: 'Continue.', send: true },
   { id: 's_ooc', cmd: 'ooc', title: 'Out of character (roleplay)', text: '(( OOC: {{text}} ))' },
   { id: 's_init', cmd: 'init', title: 'Write AGENTS.md (agent)', text: 'Look through this workspace (start with repo_map, then read the key files: README, package/build files, entry points, tests) and write AGENTS.md at the top of the workspace: what the project is, how it is laid out, how to build, run and test it, the code style and conventions you see, and anything a new contributor must not break. Keep it short and factual – it is sent with every message in this chat. {{text}}' },
+  // for studying (decision 275): a quiz with ask_user, flashcards as a table and a CSV, a compiler error explained
+  { id: 's_quiz', cmd: 'quiz', title: 'Quiz me', text: 'Quiz me on this, one question at a time. Ask each one with ask_user as a multiple-choice question (4 options, one right). After my answer, say whether it was right and explain why in a sentence or two, then ask the next one. After 5 questions (or when I say stop), give my score and what to review. Topic or material:\n\n{{text}}' },
+  { id: 's_flashcards', cmd: 'flashcards', title: 'Make flashcards', text: 'Make flashcards from this: one card per key fact, term or idea – a short question or term on the front, a short answer on the back. Show them as a Markdown table (Front | Back), and save the same cards as a CSV with the columns front,back to /workspace/output/flashcards.csv (it imports into Anki and Quizlet):\n\n{{text}}' },
+  { id: 's_explain_error', cmd: 'explain-error', title: 'Explain an error', text: 'I am a beginner. Explain this compiler or runtime error step by step: what the message means in plain words, which line and part of my code it points at, the most likely cause, and how to fix it (show the corrected line). If you need more of my code to be sure, say what to paste:\n\n{{text}}' },
 ];
 
-// snippets added in later versions: given once to people who already have their own list
+// snippets added in later versions: given once to people who already have their own list (after the v4 step below:
+// the study ones are v5, decision 275)
 const ADDED = { 2: ['s_init'] };
+const ADDED_LATER = { 5: ['s_quiz', 's_flashcards', 's_explain_error'] };
+const LATEST = 5;
 export function ensureSnippets(settings) {
   if (!Array.isArray(settings.snippets)) {
     settings.snippets = DEFAULT_SNIPPETS.map((s) => ({ ...s }));
-    settings.snippetsV = 4;
+    settings.snippetsV = LATEST;
     return true;
   }
   let changed = false;
-  for (const [v, ids] of Object.entries(ADDED)) {
-    if ((settings.snippetsV || 1) >= Number(v)) continue;
-    for (const id of ids) {
-      const d = DEFAULT_SNIPPETS.find((x) => x.id === id);
-      if (d && !settings.snippets.some((x) => x.id === id || x.cmd === d.cmd)) settings.snippets.push({ ...d });
+  const add = (list) => {
+    for (const [v, ids] of Object.entries(list)) {
+      if ((settings.snippetsV || 1) >= Number(v)) continue;
+      for (const id of ids) {
+        const d = DEFAULT_SNIPPETS.find((x) => x.id === id);
+        if (d && !settings.snippets.some((x) => x.id === id || x.cmd === d.cmd)) settings.snippets.push({ ...d });
+      }
+      settings.snippetsV = Number(v);
+      changed = true;
     }
-    settings.snippetsV = Number(v);
-    changed = true;
-  }
+  };
+  add(ADDED);
   // v4: "Continue" is no longer put on the roleplay bar (sending an empty message already continues)
   if ((settings.snippetsV || 1) < 4) {
     const c = settings.snippets.find((x) => x.id === 's_continue');
@@ -38,6 +48,7 @@ export function ensureSnippets(settings) {
     settings.snippetsV = 4;
     changed = true;
   }
+  add(ADDED_LATER);
   return changed;
 }
 

@@ -85,7 +85,7 @@ test.describe('tool permissions', () => {
   test('"Ask me" stops for your OK, "Allow for this chat" is remembered, "Never" refuses', async ({ app, request }) => {
     await app.fill('#input', 'PATCHME please');
     await app.click('#send-btn');
-    await expect(app.locator('#ask-question')).toContainText('Allow write_file');
+    await expect(app.locator('#ask-question')).toContainText('Allow ✏️ Write files');
     await app.locator('#ask-options button', { hasText: 'Allow for this chat' }).click();
     await app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 30000 });
     const req = await lastRequest(request);

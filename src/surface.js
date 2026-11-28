@@ -25,6 +25,7 @@ export const SURFACES = {
   pc_read: 'pc',
   pc_import: 'pc',
   pc_write: 'pc',
+  pc_edit: 'pc',
   pc_shell: 'pc',
   pc_job: 'pc',
   read_file: 'workspace',

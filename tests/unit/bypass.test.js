@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { gateDecision, guardKeptInBypass, effectivePhoneMode, isBypass, BYPASS_KEEPS, BYPASS_SKIPS } from '../../src/permissions.js';
 import { shellDanger } from '../../src/shellguard.js';
 import { asksFirst } from '../../src/planmode.js';
-import { toolsSystemPrompt, BYPASS_PROMPT } from '../../src/tools.js';
+import { toolsSystemPrompt, BYPASS_PROMPT, chatDate } from '../../src/tools.js';
 
 // the same inputs gateToolCall (engine.js) puts together for one call
 const decide = (name, args, { perms = {}, mode = '', allowed = [], guard = true, askPush = false } = {}) => {
@@ -92,5 +92,29 @@ describe('phone folder and the model', () => {
     const keeps = BYPASS_KEEPS.join(' ');
     for (const w of ['Never', 'SSH', 'location', 'contacts', 'calendar', 'texts', 'tokens']) expect(keeps).toContain(w);
     expect(BYPASS_SKIPS.join(' ')).toContain('Read-only stays read-only');
+  });
+});
+
+describe('what is switched off, with where to turn it on (decision 270)', () => {
+  it('every group that is off is named with its Settings path; a helper is not told', () => {
+    const t = toolsSystemPrompt({ web: true, files: true }, 0, null);
+    const line = t.split('\n').find((l) => l.startsWith('- Switched off right now:'));
+    expect(line).toContain('Python (Settings › Tools & agent › Tools)');
+    expect(line).toContain('calendar, contacts, location and places (Settings › Tools & agent › Phone › Phone data)');
+    expect(line).toContain("files on the user's PC (Settings › Connections › Files on my PC)");
+    expect(line).toContain('texts, call log, notifications and place triggers (Settings › Tools & agent › Phone › Sensitive phone access)');
+    expect(line).not.toContain('web search');
+    expect(toolsSystemPrompt({ files: true, helper: true }, 0, null)).not.toContain('Switched off right now');
+  });
+});
+
+describe('dates for search_chats', () => {
+  it('reads a day, or days / weeks / months back', () => {
+    const now = Date.parse('2026-11-27T12:00:00');
+    expect(chatDate('7d', now)).toBe(now - 7 * 864e5);
+    expect(chatDate('2w', now)).toBe(now - 14 * 864e5);
+    expect(chatDate('2026-11-01', now)).toBe(Date.parse('2026-11-01T00:00:00'));
+    expect(chatDate('', now)).toBe(0);
+    expect(chatDate('soon', now)).toBeNaN();
   });
 });

@@ -87,3 +87,14 @@ describe('one toolkit, one home', () => {
     expect(body).toMatch(/exit 1/);
   });
 });
+
+describe('doctor says which network failure it was (decision 269)', () => {
+  it('a name that does not exist is FAILED with a reason, never one BLOCKED for every kind of failure', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const script = fileURLToPath(new URL('../../src/toolkit/doctor', import.meta.url));
+    const out = execFileSync('sh', [script], { env: { ...process.env, DOCTOR_HOSTS: 'nonexistent.invalid' }, encoding: 'utf8', timeout: 30000 });
+    expect(out).toMatch(/^net nonexistent\.invalid\s+FAILED/m);
+    expect(out).not.toMatch(/BLOCKED/);
+  }, 40000);
+});

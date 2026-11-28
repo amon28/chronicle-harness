@@ -46,6 +46,9 @@ public class WakeReceiver extends BroadcastReceiver {
         final long token = due.length() > 0 ? SchedulerPlugin.wake(due) : 0;
         if (due.length() > 0 && token == 0) {
             for (int k = 0; k < due.length(); k++) notifyDue(c, due.optJSONObject(k));
+            // the page is not there to plan the next run of a repeating task: set it here, so it is said again next
+            // time instead of stopping (decision 276); the page replaces the whole plan once it runs
+            if (!trigger) rearmRepeats(c, due, rest, now);
         } else if (due.length() > 0) {
             // handed to the page – but a page frozen in the background never runs it: no answer in a few seconds, the
             // notifications go out. The broadcast is kept open meanwhile (goAsync): once onReceive returns Android may
@@ -68,6 +71,23 @@ public class WakeReceiver extends BroadcastReceiver {
         SchedulerPlugin.arm(c);
     }
 
+    private static void rearmRepeats(Context c, JSONArray due, JSONArray rest, long now) {
+        boolean changed = false;
+        for (int k = 0; k < due.length(); k++) {
+            JSONObject o = due.optJSONObject(k);
+            double every = o == null ? 0 : o.optDouble("every", 0);
+            if (!"task".equals(o == null ? "" : o.optString("kind")) || !(every >= 5)) continue;
+            try {
+                JSONObject next = new JSONObject(o.toString());
+                next.put("at", now + (long) (every * 60000));
+                rest.put(next);
+                changed = true;
+            } catch (Exception ignored) {
+            }
+        }
+        if (changed) c.getSharedPreferences(SchedulerPlugin.PREFS, Context.MODE_PRIVATE).edit().putString("plan", rest.toString()).apply();
+    }
+
     private static void notifyDue(Context c, JSONObject o) {
         NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null || o == null) return;
@@ -82,6 +102,7 @@ public class WakeReceiver extends BroadcastReceiver {
                 .setContentText(o.optString("body", ""))
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(o.optString("body", "")))
                 .setAutoCancel(true)
+                .setOnlyAlertOnce(true) // a repeating check that could not run replaces its notice, quietly after the first
                 .setContentIntent(pi);
         try {
             nm.notify(("wake:" + conv + ":" + o.optString("kind")).hashCode(), b.build());

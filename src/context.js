@@ -106,33 +106,41 @@ const words = (q) => [...new Set(String(q || '').toLowerCase().match(/[\p{L}\p{N
 const textOfMsg = (m) => [m.content || '', ...(m.rounds || []).map((r) => r.content || '')].join('\n');
 
 /** → [{ id, title, at, score, snippet }] best first. convs: [{ id, title, messages, updatedAt }]. */
-export function searchChats(convs, query, { exclude = null, max = 8 } = {}) {
+export function searchChats(convs, query, { exclude = null, max = 8, since = 0, before = 0 } = {}) {
   const terms = words(query);
   if (!terms.length) return [];
+  // a word matches where a word starts (decision 270): "cat" no longer finds every "locate" and "education", while
+  // "plan" still finds "planning"
+  const res = terms.map((w) => new RegExp(`(?<![\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u'));
+  const has = (low, k) => res[k].test(low);
+  const pos = (low, k) => low.search(res[k]);
+  const inRange = (t) => (!since || t >= since) && (!before || t < before);
   const out = [];
   for (const c of convs) {
     if (c.id === exclude || !c.messages?.length) continue;
     const title = String(c.title || '').toLowerCase();
+    const msgs = since || before ? c.messages.filter((m) => inRange(m.at || c.updatedAt || 0)) : c.messages;
+    if (!msgs.length) continue;
     let score = 0;
     let best = { n: 0, text: '', at: 0 };
-    for (const m of c.messages) {
+    for (const m of msgs) {
       const t = textOfMsg(m);
       if (!t) continue;
       const low = t.toLowerCase();
-      const n = terms.reduce((k, w) => k + (low.includes(w) ? 1 : 0), 0);
+      const n = terms.reduce((k, _, i) => k + (has(low, i) ? 1 : 0), 0);
       if (!n) continue;
       score += n;
       if (n > best.n) best = { n, text: t, at: m.at || 0, low };
     }
-    score += terms.reduce((k, w) => k + (title.includes(w) ? 3 : 0), 0);
+    score += terms.reduce((k, _, i) => k + (has(title, i) ? 3 : 0), 0);
     if (!score) continue;
-    const all = terms.every((w) => title.includes(w) || c.messages.some((m) => textOfMsg(m).toLowerCase().includes(w)));
+    const all = terms.every((_, i) => has(title, i) || msgs.some((m) => has(textOfMsg(m).toLowerCase(), i)));
     let snippet = '';
     if (best.text) {
-      const at = Math.max(0, Math.min(...terms.map((w) => best.low.indexOf(w)).filter((i) => i >= 0)) - 80);
+      const at = Math.max(0, Math.min(...terms.map((_, i) => pos(best.low, i)).filter((i) => i >= 0)) - 80);
       snippet = (at ? '…' : '') + best.text.slice(at, at + 240).replace(/\s+/g, ' ').trim() + (best.text.length > at + 240 ? '…' : '');
     }
-    out.push({ id: c.id, title: c.title || 'Untitled chat', at: c.updatedAt || c.messages.at(-1)?.at || 0, score: score + (all ? 10 : 0), snippet });
+    out.push({ id: c.id, title: c.title || 'Untitled chat', at: best.at || c.updatedAt || c.messages.at(-1)?.at || 0, score: score + (all ? 10 : 0), snippet });
   }
   return out.sort((a, b) => b.score - a.score || b.at - a.at).slice(0, max);
 }

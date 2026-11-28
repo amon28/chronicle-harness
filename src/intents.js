@@ -6,16 +6,16 @@
  */
 const fn = (name, description, properties, required = []) => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } });
 
-export const SETTINGS_PAGES = { wifi: 'android.settings.WIFI_SETTINGS', bluetooth: 'android.settings.BLUETOOTH_SETTINGS', display: 'android.settings.DISPLAY_SETTINGS', sound: 'android.settings.SOUND_SETTINGS', battery: 'android.intent.action.POWER_USAGE_SUMMARY', location: 'android.settings.LOCATION_SOURCE_SETTINGS', notifications: 'android.settings.ALL_APPS_NOTIFICATION_SETTINGS', apps: 'android.settings.APPLICATION_SETTINGS', date: 'android.settings.DATE_SETTINGS', language: 'android.settings.LOCALE_SETTINGS', accessibility: 'android.settings.ACCESSIBILITY_SETTINGS', storage: 'android.settings.INTERNAL_STORAGE_SETTINGS', this_app: 'android.settings.APPLICATION_DETAILS_SETTINGS' };
+export const SETTINGS_PAGES = { wifi: 'android.settings.WIFI_SETTINGS', bluetooth: 'android.settings.BLUETOOTH_SETTINGS', display: 'android.settings.DISPLAY_SETTINGS', sound: 'android.settings.SOUND_SETTINGS', battery: 'android.intent.action.POWER_USAGE_SUMMARY', location: 'android.settings.LOCATION_SOURCE_SETTINGS', notifications: 'android.settings.ALL_APPS_NOTIFICATION_SETTINGS', apps: 'android.settings.APPLICATION_SETTINGS', date: 'android.settings.DATE_SETTINGS', language: 'android.settings.LOCALE_SETTINGS', accessibility: 'android.settings.ACCESSIBILITY_SETTINGS', storage: 'android.settings.INTERNAL_STORAGE_SETTINGS', developer: 'android.settings.APPLICATION_DEVELOPMENT_SETTINGS', nfc: 'android.settings.NFC_SETTINGS', vpn: 'android.settings.VPN_SETTINGS', this_app: 'android.settings.APPLICATION_DETAILS_SETTINGS' };
 
 export const intentDefs = () => [
   fn(
     'android_intent',
-    'Hand something to another app on the phone. kind: open_url (a web page in the browser), dial (opens the dialer with the number – the user presses call), sms (a text ready to send in the messages app), email (a draft in the mail app), map (a place or search on the map), calendar_event (a new event filled in, to save), alarm, timer, share (the share sheet with text), settings (a settings page), open_app (launch an installed app by package name – call list_apps first to find it; list_apps with query narrows the list), share_file (the share sheet with a file from /workspace – path), open_file (open a /workspace file in another app that can show it – path). The other app opens for the user to finish – nothing is sent or saved by itself – and the user is asked first every time.',
+    'Hand something to another app on the phone. kind: open_url (a web page in the browser), dial (opens the dialer with the number – the user presses call), sms (a text ready to send in the messages app), email (a draft in the mail app), map (a place or search on the map), calendar_event (a new event filled in, to save), alarm, timer, share (the share sheet with text), settings (a settings page), open_app (launch an installed app by package name – call list_apps first to find it; list_apps with query narrows the list), deep_link (open an app’s own link, e.g. myapp://screen, homeassistant://navigate, market://details?id=… – url, optionally package to pick the app), share_file (the share sheet with a file from /workspace – path), open_file (open a /workspace file in another app that can show it – path). The other app opens for the user to finish – nothing is sent or saved by itself – and the user is asked first every time.',
     {
-      kind: { type: 'string', enum: ['list_apps', 'open_url', 'dial', 'sms', 'email', 'map', 'calendar_event', 'alarm', 'timer', 'share', 'settings', 'open_app', 'share_file', 'open_file'] },
+      kind: { type: 'string', enum: ['list_apps', 'open_url', 'dial', 'sms', 'email', 'map', 'calendar_event', 'alarm', 'timer', 'share', 'settings', 'open_app', 'deep_link', 'share_file', 'open_file'] },
       path: { type: 'string', description: 'share_file / open_file: a file in /workspace' },
-      url: { type: 'string', description: 'open_url: an http(s) address' },
+      url: { type: 'string', description: "open_url: an http(s) address; deep_link: the app's link (myapp://…)" },
       to: { type: 'string', description: 'dial / sms: the phone number; email: the address(es), comma-separated' },
       subject: { type: 'string', description: 'email: subject' },
       text: { type: 'string', description: 'sms / email: the message; share: what to share' },
@@ -29,9 +29,10 @@ export const intentDefs = () => [
       all_day: { type: 'boolean', description: 'calendar_event: an all-day event' },
       hour: { type: 'integer', description: 'alarm: 0-23' },
       minute: { type: 'integer', description: 'alarm: 0-59' },
+      days: { type: 'array', items: { type: 'string', enum: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] }, description: 'alarm: repeat on these days (left out: once, at the next time it comes round)' },
       seconds: { type: 'integer', description: 'timer: length in seconds' },
       page: { type: 'string', enum: Object.keys(SETTINGS_PAGES), description: 'settings: which page' },
-      package: { type: 'string', description: 'open_app: the app package from list_apps, e.g. com.spotify.music' },
+      package: { type: 'string', description: 'open_app: the app package from list_apps, e.g. com.spotify.music; deep_link: optionally the app that should open the link' },
     },
     ['kind'],
   ),
@@ -45,10 +46,22 @@ const isoMs = (s) => {
 };
 
 /** The intent to start and how to describe it to the user. Throws on anything outside the allow-list. */
-export function buildIntent(a) {
+export function buildIntent(a, opts = {}) {
   const k = String(a.kind || '');
   const text = (x, n = 2000) => String(x ?? '').slice(0, n);
   switch (k) {
+    case 'deep_link': {
+      // an app's own link (decision 276) – testing a deep link, Home Assistant, the store page; the user is asked first
+      const u = String(a.url || '').trim();
+      const m = /^([a-z][a-z0-9+.-]{1,40}):[^\s]+$/i.exec(u);
+      if (!m) throw new Error('deep_link needs a url like myapp://path');
+      const sch = m[1].toLowerCase();
+      if (['http', 'https'].includes(sch)) throw new Error('deep_link is for an app\'s own scheme – for a web page use open_url');
+      if (['file', 'content', 'intent', 'javascript', 'data', 'jar', 'android-app', 'android.resource', 'blob', 'about'].includes(sch)) throw new Error(`deep_link cannot open ${sch}: links – they reach into files or other apps' content`);
+      const pkg = String(a.package || '').trim();
+      if (pkg && !/^[a-zA-Z][\w]*(\.[a-zA-Z_][\w]*)+$/.test(pkg)) throw new Error('package must be an app package name like com.example.app');
+      return { intent: { action: 'android.intent.action.VIEW', data: u, deepLink: true, ...(pkg ? { package: pkg } : {}) }, summary: `Open this link in ${pkg || 'the app that handles it'}?\n\n${u.slice(0, 300)}` };
+    }
     case 'open_url': {
       const u = String(a.url || '');
       if (!/^https?:\/\/[^\s]+$/i.test(u)) throw new Error('open_url needs an http(s) url');
@@ -93,7 +106,18 @@ export function buildIntent(a) {
       const h = Number(a.hour);
       const m = Number(a.minute ?? 0);
       if (!Number.isInteger(h) || h < 0 || h > 23 || !Number.isInteger(m) || m < 0 || m > 59) throw new Error('alarm needs hour 0-23 and minute 0-59');
-      return { intent: { action: 'android.intent.action.SET_ALARM', extras: { 'android.intent.extra.alarm.HOUR': h, 'android.intent.extra.alarm.MINUTES': m, ...(a.title ? { 'android.intent.extra.alarm.MESSAGE': text(a.title, 100) } : {}) } }, summary: `Set an alarm for ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}${a.title ? ` (“${text(a.title, 60)}”)` : ''}?` };
+      // which day it rings, said in the question and the result (decision 270): a 7:00 asked for at 8 in the morning is
+      // tomorrow's, and "an alarm for 07:00" read as today
+      const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+      const days = [...new Set((Array.isArray(a.days) ? a.days : []).map((d) => String(d).toLowerCase().slice(0, 3)))].filter((d) => DAYS.includes(d));
+      const NAMES = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+      const now = new Date(opts.now ?? Date.now());
+      const at = new Date(now);
+      at.setHours(h, m, 0, 0);
+      if (at <= now) at.setDate(at.getDate() + 1);
+      const day = at.toDateString() === now.toDateString() ? 'today' : 'tomorrow';
+      const when = days.length ? `every ${days.length === 7 ? 'day' : ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].filter((d) => days.includes(d)).map((d) => NAMES[d]).join(', ')}` : `${day}, ${at.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}`;
+      return { intent: { action: 'android.intent.action.SET_ALARM', extras: { 'android.intent.extra.alarm.HOUR': h, 'android.intent.extra.alarm.MINUTES': m, ...(days.length ? { 'android.intent.extra.alarm.DAYS': days.map((d) => DAYS.indexOf(d) + 1) } : {}), ...(a.title ? { 'android.intent.extra.alarm.MESSAGE': text(a.title, 100) } : {}) } }, summary: `Set an alarm for ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} ${when}${a.title ? ` (“${text(a.title, 60)}”)` : ''}?` };
     }
     case 'timer': {
       const sec = Number(a.seconds);
@@ -159,7 +183,8 @@ export async function runIntentTool(args, ctx) {
   }
   // in the background Android does not let an app open another one: it waits in a notification instead
   if (started?.notified) return { ok: true, result: `Chronicle is in the background, so Android did not open it: a notification asks the user to tap it (${args.kind}). Say so; do not assume it was opened, sent or saved.`, display: { path: `${args.kind} – waiting in a notification` } };
-  return { ok: true, result: `Opened (${args.kind}). The user finishes it in the other app – do not assume it was sent or saved.`, display: { path: args.kind } };
+  const what = args.kind === 'alarm' ? ` – ${b.summary.replace(/^Set an alarm for /, 'an alarm for ').replace(/\?$/, '')}` : '';
+  return { ok: true, result: `Opened (${args.kind}${what}). The user finishes it in the other app – do not assume it was sent or saved.`, display: { path: args.kind } };
 }
 
 const FILE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', csv: 'text/csv', json: 'application/json', html: 'text/html', htm: 'text/html', txt: 'text/plain', md: 'text/markdown', zip: 'application/zip', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', mp4: 'video/mp4', webm: 'video/webm', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', epub: 'application/epub+zip', xml: 'text/xml', py: 'text/x-python', js: 'text/javascript', css: 'text/css', apk: '' };
@@ -176,7 +201,7 @@ async function fileIntent(args, ctx) {
   if (!f) return bad(`${path} is not in the workspace (list_files shows what is)`);
   const name = path.split('/').pop().replace(/[^\w.() +-]/g, '_').slice(0, 100) || 'file';
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-  if (ext === 'apk') return bad('apps cannot be handed over this way');
+  if (ext === 'apk') return bad("an app cannot be installed or handed over from here. To install it, the user copies it to the phone's Download folder (phone_write from_workspace, or cp to /sdcard/Download in the shell when storage access is on) and opens it from the Files app – Android then asks them itself");
   if (f.data.byteLength > MAX_SHARE_BYTES) return bad(`${path} is ${sizeText(f.data.byteLength)} – too big to hand to another app from here (limit ${sizeText(MAX_SHARE_BYTES)})`);
   if (!ctx.intents?.file) return { ok: false, result: 'Files can only be handed to other apps in the Android app.', display: { error: 'unavailable' } };
   if (!ctx.ask) return { ok: false, result: 'Opening another app needs your approval, which is not available here.', display: { error: 'unavailable' } };

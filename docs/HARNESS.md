@@ -66,7 +66,7 @@ The page runs in a real Android WebView (Chromium) placed off screen. It is not 
 
 ## Shell and jobs
 
-- The shell is a small Alpine Linux inside the app. `apk add` installs packages. `/workspace` is this chat's workspace and `/phone` is the folder the user linked. If `/phone` is missing, the user has not linked a folder: tell them instead of creating one.
+- The shell is a Debian Linux inside the app (ARM64, under proot). `apt-get install -y …` installs packages. `/workspace` is this chat's workspace and `/phone` is the folder the user linked. If `/phone` is missing, the user has not linked a folder: tell them instead of creating one.
 - A repo cloned outside `/workspace` (e.g. under `/root`) exists only in the shell: work on it there. `view_images` reads images from it by absolute path; small sprites are shown enlarged with hard edges on a checkerboard (use `background: "all"` to see it on dark and light too).
 - `/workspace` is mirrored file by file into the app. `node_modules` and `.git` folders and symbolic links stay in the shell only (`list_files` and `read_file` do not see them). It is compared up to 20,000 files: past that the result says the comparison was incomplete, and nothing is deleted because of it. Clone repositories and install packages under `/root`, and put only the results in `/workspace`.
 - A command that runs past 30 s returns a job id. Poll it with `shell_job` (or `job out <id>` in the shell); do not `sleep` in a loop. While a job runs you see only the end of its output, and very long output is trimmed. Send it to a file (`> out.log`) when you need all of it. Check the exit code before claiming success.

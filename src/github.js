@@ -102,6 +102,10 @@ export function githubHint(output, kind = tokenKind(auth?.token)) {
   // only a real refusal over https (not a progress count with "403" in it, not an SSH clone that worked)
   if (kind === 'app' && /(fatal:|error:|remote:)/i.test(o) && /(Repository not found|Resource not accessible by integration|Permission to \S+ denied|returned error: 40[34])/i.test(o) && /https:\/\/github\.com/i.test(o) && !/git@github\.com/i.test(o))
     return 'GitHub: the GitHub App this shell is signed in with is not installed on that repo (or lacks the permission). Ask the user to add the repo to the app\'s installation on GitHub (Settings › Applications › Installed GitHub Apps › Configure), then try again. Do not create SSH keys or other tokens.';
+  // a push that changes .github/workflows (decision 276): GitHub wants the workflow permission, which the sign-in does
+  // not ask for on purpose (a workflow runs with the repo's secrets) – said, instead of a bare "refusing to allow"
+  if (/refusing to allow an? (OAuth App|GitHub App|Personal Access Token) to create or update workflow/i.test(o) || /without `?workflow`? scope/i.test(o))
+    return "GitHub: this push changes a file in .github/workflows, and the app's GitHub sign-in may not change workflows (on purpose: they run with the repo's secrets). Do not look for another credential. Tell the user: push this commit themselves, or paste a fine-grained token for that one repo with the Workflows permission (Settings › Connections › GitHub). Other commits can be pushed without the workflow change (git rebase to drop it, or commit it separately).";
   if (/Permission denied \(publickey\)/.test(o) && sshOn())
     return `GitHub over SSH: the user's key is used only inside a clone of a listed repo (${ssh.repos.join(', ')}), or with ssh-git for a bare URL (e.g. ssh-git ls-remote git@github.com:${ssh.repos[0]}.git). A repo that is not listed never gets it – tell the user to add it in Settings › Connections › GitHub › SSH key.`;
   return '';

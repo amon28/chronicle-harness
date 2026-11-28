@@ -457,6 +457,56 @@ public class PhonePlugin extends Plugin {
         return r;
     }
 
+    /**
+     * The local network the phone is on now, for a chat's local-network grant (decision 271), with no permission needed:
+     * { connected, transport: wifi|ethernet|other, gateway?, ipv4[], dns[], domain?, bssid?, ssid? } – the BSSID and name
+     * only when Android lets the app see them (precise location). A grant is tied to these, not to an address alone.
+     */
+    @PluginMethod
+    public void lanNet(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("connected", false);
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) service(Context.CONNECTIVITY_SERVICE);
+            android.net.Network net = cm == null ? null : cm.getActiveNetwork();
+            android.net.NetworkCapabilities caps = net == null ? null : cm.getNetworkCapabilities(net);
+            LinkProperties lp = net == null ? null : cm.getLinkProperties(net);
+            if (caps == null || lp == null) {
+                call.resolve(r);
+                return;
+            }
+            boolean wifi = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI);
+            boolean eth = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET);
+            r.put("connected", true);
+            r.put("transport", wifi ? "wifi" : eth ? "ethernet" : "other");
+            JSArray v4 = new JSArray();
+            for (LinkAddress a : lp.getLinkAddresses()) if (a.getAddress() instanceof Inet4Address) v4.put(a.getAddress().getHostAddress() + "/" + a.getPrefixLength());
+            r.put("ipv4", v4);
+            for (RouteInfo ri : lp.getRoutes()) {
+                if (ri.isDefaultRoute() && ri.getGateway() instanceof Inet4Address) {
+                    r.put("gateway", ri.getGateway().getHostAddress());
+                    break;
+                }
+            }
+            JSArray dns = new JSArray();
+            for (InetAddress d : lp.getDnsServers()) dns.put(d.getHostAddress());
+            r.put("dns", dns);
+            if (lp.getDomains() != null) r.put("domain", lp.getDomains());
+            if (wifi && granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
+                WifiManager wm = (WifiManager) service(Context.WIFI_SERVICE);
+                WifiInfo wi = wm == null ? null : wm.getConnectionInfo();
+                if (wi != null) {
+                    String b = wi.getBSSID();
+                    if (b != null && !"02:00:00:00:00:00".equals(b)) r.put("bssid", b);
+                    String ssid = wi.getSSID();
+                    if (ssid != null && !"<unknown ssid>".equals(ssid)) r.put("ssid", ssid.replaceAll("^\"|\"$", ""));
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        call.resolve(r);
+    }
+
     private static String standard(int s) {
         switch (s) {
             case ScanResult.WIFI_STANDARD_LEGACY: return "802.11a/b/g";

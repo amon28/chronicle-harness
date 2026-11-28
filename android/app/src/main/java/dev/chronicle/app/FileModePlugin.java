@@ -118,7 +118,7 @@ public class FileModePlugin extends Plugin {
     /** What the app never mirrors (the JS scan skips them too): a package install or a clone, thousands of files. */
     // the same list as SHELL_ONLY in src/shellfs.js: caches and installs, thousands of files nobody reads through the app
     private static final java.util.Set<String> SHELL_ONLY = new java.util.HashSet<>(java.util.Arrays.asList(
-        "node_modules", ".git", ".venv", "venv", "__pycache__", ".next", ".cache", ".gradle", ".tox", ".mypy_cache", ".pytest_cache", "target"));
+        "node_modules", ".git", ".venv", "venv", "__pycache__", ".next", ".cache", ".gradle", ".tox", ".mypy_cache", ".pytest_cache", "target", ".pio", ".dart_tool", ".expo", ".kotlin", ".cxx", ".pnpm-store", ".turbo", ".parcel-cache", ".svelte-kit"));
     private static boolean shellOnly(String name) {
         return SHELL_ONLY.contains(name);
     }

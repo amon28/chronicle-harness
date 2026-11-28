@@ -43,8 +43,23 @@ public class GoStreamPlugin extends Plugin {
             return;
         }
         final boolean guard = call.getBoolean("guard", false); // public-web reads: never reach private networks, not even through a redirect
+        // the exact local addresses this chat was allowed (decision 271) – only for a request that STARTS at one of them:
+        // a public page that redirects there is still refused
+        final java.util.Set<String> lan = new java.util.HashSet<>();
+        try {
+            com.getcapacitor.JSArray arr = call.getArray("lanAllow");
+            if (arr != null) for (int i = 0; i < arr.length(); i++) lan.add(arr.getString(i));
+        } catch (Exception ignored) {
+        }
+        String h0;
+        try {
+            h0 = new URL(url).getHost();
+        } catch (Exception e) {
+            h0 = "";
+        }
+        final java.util.Set<String> allow = lan.contains(h0) ? lan : java.util.Collections.emptySet();
         call.resolve();
-        pool.execute(() -> run(id, url, headers, body, guard, 0));
+        pool.execute(() -> run(id, url, headers, body, guard, 0, allow));
     }
 
     /**
@@ -58,30 +73,53 @@ public class GoStreamPlugin extends Plugin {
             call.reject("An http(s) url is required");
             return;
         }
+        // guard: a public-web read (fetch_url's PDF, decision 270) – every hop must be public, redirects followed by hand;
+        // lanAllow: the chat's allowed local addresses, only when the request starts at one (decision 271)
+        final boolean guard = call.getBoolean("guard", false);
+        final java.util.Set<String> lan = new java.util.HashSet<>();
+        try {
+            com.getcapacitor.JSArray arr = call.getArray("lanAllow");
+            if (arr != null) for (int i = 0; i < arr.length(); i++) lan.add(arr.getString(i));
+        } catch (Exception ignored) {
+        }
         pool.execute(() -> {
             HttpURLConnection conn = null;
             try {
-                conn = (HttpURLConnection) new URL(url).openConnection();
-                conn.setConnectTimeout(30000);
-                conn.setReadTimeout(120000);
+                URL target = new URL(url);
+                final java.util.Set<String> allow = lan.contains(target.getHost()) ? lan : java.util.Collections.emptySet();
                 String method = call.getString("method", "GET");
-                conn.setRequestMethod(method);
-                conn.setInstanceFollowRedirects("GET".equals(method));
                 JSObject headers = call.getObject("headers", new JSObject());
-                for (Iterator<String> it = headers.keys(); it.hasNext(); ) {
-                    String k = it.next();
-                    conn.setRequestProperty(k, headers.getString(k));
-                }
                 String b64 = call.getString("bodyB64");
-                if (b64 != null) {
-                    byte[] body = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP);
-                    conn.setDoOutput(true);
-                    conn.setFixedLengthStreamingMode(body.length);
-                    try (OutputStream os = conn.getOutputStream()) {
-                        os.write(body);
+                int status;
+                for (int hop = 0; ; hop++) {
+                    if (guard) requirePublic(target, allow);
+                    conn = (HttpURLConnection) target.openConnection();
+                    conn.setConnectTimeout(30000);
+                    conn.setReadTimeout(120000);
+                    conn.setRequestMethod(method);
+                    // a guarded read follows redirects by hand, checking every hop; otherwise GET follows them itself
+                    conn.setInstanceFollowRedirects(!guard && "GET".equals(method));
+                    for (Iterator<String> it = headers.keys(); it.hasNext(); ) {
+                        String k = it.next();
+                        conn.setRequestProperty(k, headers.getString(k));
                     }
+                    if (b64 != null) {
+                        byte[] body = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP);
+                        conn.setDoOutput(true);
+                        conn.setFixedLengthStreamingMode(body.length);
+                        try (OutputStream os = conn.getOutputStream()) {
+                            os.write(body);
+                        }
+                    }
+                    status = conn.getResponseCode();
+                    String loc = conn.getHeaderField("Location");
+                    if (!guard || !"GET".equals(method) || status < 300 || status >= 400 || loc == null) break;
+                    if (hop >= 5) throw new Exception("Too many redirects");
+                    conn.disconnect();
+                    URL next = new URL(target, loc);
+                    if (!sameOrigin(target, next)) headers = forOtherOrigin(headers); // no credentials to another origin (decision 273)
+                    target = next;
                 }
-                int status = conn.getResponseCode();
                 InputStream in = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
                 BigBytes out = new BigBytes(getContext()); // past a few MB it goes to a file, not into the message
                 if (in != null) {
@@ -122,8 +160,36 @@ public class GoStreamPlugin extends Plugin {
         call.resolve();
     }
 
+    /**
+     * Does this address resolve to a private network? { url } → resolves, or rejects with the reason. A mod's request
+     * asks this for each redirect hop before it is sent (decision 273): its host permission is checked in JS, the
+     * address the name stands for only here.
+     */
+    @PluginMethod
+    public void checkPublic(final PluginCall call) {
+        final String url = call.getString("url");
+        if (url == null) {
+            call.reject("url is required");
+            return;
+        }
+        pool.execute(() -> {
+            try {
+                requirePublic(new URL(url));
+                call.resolve();
+            } catch (Exception e) {
+                call.reject(String.valueOf(e.getMessage()));
+            }
+        });
+    }
+
     /** Blocks addresses on private networks (loopback, LAN, link-local, carrier-grade NAT, IPv6 unique-local). */
     private static void requirePublic(URL u) throws Exception {
+        requirePublic(u, java.util.Collections.emptySet());
+    }
+
+    /** …except an address literal in `allow` (a chat's local-network grant): never a name, which could point anywhere. */
+    private static void requirePublic(URL u, java.util.Set<String> allow) throws Exception {
+        if (allow.contains(u.getHost()) && u.getHost().matches("^[0-9.]+$")) return;
         for (java.net.InetAddress a : java.net.InetAddress.getAllByName(u.getHost())) {
             byte[] b = a.getAddress();
             boolean cgnat = b.length == 4 && (b[0] & 0xff) == 100 && (b[1] & 0xc0) == 64;
@@ -135,10 +201,14 @@ public class GoStreamPlugin extends Plugin {
     }
 
     private void run(String id, String url, JSObject headers, String body, boolean guard, int hops) {
+        run(id, url, headers, body, guard, hops, java.util.Collections.emptySet());
+    }
+
+    private void run(String id, String url, JSObject headers, String body, boolean guard, int hops, java.util.Set<String> allow) {
         HttpURLConnection conn = null;
         try {
             URL target = new URL(url);
-            if (guard) requirePublic(target);
+            if (guard) requirePublic(target, allow);
             conn = (HttpURLConnection) target.openConnection();
             if (guard) conn.setInstanceFollowRedirects(false); // followed by hand below, checking every hop
             if (hops == 0) active.put(id, conn);
@@ -169,19 +239,24 @@ public class GoStreamPlugin extends Plugin {
             int status = conn.getResponseCode();
             if (guard && status >= 300 && status < 400 && conn.getHeaderField("Location") != null) {
                 if (hops >= 5) throw new Exception("Too many redirects");
-                String next = new URL(target, conn.getHeaderField("Location")).toString();
+                URL nextUrl = new URL(target, conn.getHeaderField("Location"));
+                String next = nextUrl.toString();
                 conn.disconnect();
                 if (!active.containsKey(id)) return; // cancelled
+                // a hop to another origin carries no credentials (decision 273): the same headers went to every hop, so
+                // a page that redirected elsewhere got the caller's Authorization, Cookie or API key header. Only
+                // headers that say nothing about the caller go on (what to accept, the user agent, the body's type).
+                if (!sameOrigin(target, nextUrl)) headers = forOtherOrigin(headers);
                 // 307 and 308 repeat the request as it was (an API moved to a new address still gets its POST);
                 // 301, 302 and 303 turn it into a plain GET, as browsers do
                 if (status == 307 || status == 308) {
-                    run(id, next, headers, body, guard, hops + 1);
+                    run(id, next, headers, body, guard, hops + 1, allow);
                 } else {
                     JSObject plain = new JSObject(headers.toString());
                     plain.remove("X-Http-Method");
                     plain.remove("Content-Type");
                     plain.remove("content-type");
-                    run(id, next, plain, null, guard, hops + 1);
+                    run(id, next, plain, null, guard, hops + 1, allow);
                 }
                 return;
             }
@@ -236,6 +311,26 @@ public class GoStreamPlugin extends Plugin {
             active.remove(id);
             if (conn != null) conn.disconnect();
         }
+    }
+
+    private static int portOf(URL u) {
+        return u.getPort() != -1 ? u.getPort() : u.getDefaultPort();
+    }
+
+    static boolean sameOrigin(URL a, URL b) {
+        return a.getProtocol().equalsIgnoreCase(b.getProtocol()) && a.getHost().equalsIgnoreCase(b.getHost()) && portOf(a) == portOf(b);
+    }
+
+    private static final java.util.Set<String> NEUTRAL_HEADERS = new java.util.HashSet<>(java.util.Arrays.asList("user-agent", "accept", "accept-language", "accept-encoding", "content-type", "x-http-method"));
+
+    /** The headers that may follow a redirect to another origin: none that could be a credential. */
+    static JSObject forOtherOrigin(JSObject headers) {
+        JSObject out = new JSObject();
+        for (Iterator<String> it = headers.keys(); it.hasNext(); ) {
+            String k = it.next();
+            if (NEUTRAL_HEADERS.contains(k.toLowerCase(java.util.Locale.ROOT))) out.put(k, headers.optString(k));
+        }
+        return out;
     }
 
     private void emitChunk(String id, StringBuilder batch) {

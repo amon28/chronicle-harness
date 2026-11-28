@@ -103,7 +103,10 @@ async function networkProbe() {
   const r = await readUrl(DOCTOR_PROBE, { maxChars: 300, timeoutMs: 12000 }).catch((e) => ({ ok: false, reason: String(e?.message || e) }));
   const ms = Date.now() - t0;
   const detail = r.ok ? 'HTTP ' + r.status + ' via ' + (r.via || 'direct') + ', ' + (r.bytes || 0) + ' bytes in ' + ms + ' ms' : 'FAILED: ' + (r.reason || 'unknown') + ' after ' + ms + ' ms';
-  return { rows: [line('network', r.ok ? 'ok' : 'error', DOCTOR_PROBE + ' - ' + detail)], ok: !!r.ok };
+  // what this row is and is not (decision 269): the app's own web requests – the Linux shell has its own route (its
+  // doctor script probes it), and local-network addresses are refused by the app's web tools whatever this says
+  const scope = ' (the app\'s own requests: fetch_url, web_search, the browser; the Linux shell is checked by its own doctor lines; addresses on the local network are refused by these tools unless the user allowed them for the chat – local_network)';
+  return { rows: [line('network', r.ok ? 'ok' : 'error', DOCTOR_PROBE + ' - ' + detail + scope)], ok: !!r.ok };
 }
 
 export async function runDoctorTool(args, ctx) {

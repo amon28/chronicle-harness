@@ -193,6 +193,13 @@ describe('built-in Linux', () => {
 });
 
 describe('job handles', () => {
+  it('an id from the job script is pointed at job out, not only "no job" (decision 269)', async () => {
+    const r = await runShellJobTool({ action: 'poll', job_id: '17' });
+    expect(r.ok).toBe(false);
+    expect(r.result).toMatch(/No job 17 among the shell tool's jobs\. If 17 came from the job script \(job run\) inside the shell, follow it there: shell \{"command":"job out 17"\}/);
+    expect((await runShellJobTool({ action: 'poll', job_id: 'job_zz' })).result).not.toMatch(/job script/);
+    expect(JSON.stringify(shellDefs())).not.toMatch(/start it with & \(it is left alone\) and follow it with shell_job/);
+  });
   it('returns a handle in well under a second instead of dying on a timeout', async () => {
     setShellSoftLimit(60);
     const t0 = Date.now();
@@ -267,5 +274,17 @@ describe('job handles', () => {
     expect(r.result).toContain('2 files into /workspace');
     expect(r.result).toContain('1 file back from /workspace');
     expect(r.result.match(/2 files into \/workspace/g)).toHaveLength(1);
+  });
+});
+
+describe('a path outside /workspace in the file tools (decision 276)', () => {
+  it('is refused with where to go, instead of landing in /workspace/root/…', async () => {
+    const { outsideWorkspace, writeFileTool } = await import('../../src/codetools.js');
+    expect(() => outsideWorkspace('/root/app/x.js')).toThrow(/\/root\/app\/x\.js is outside \/workspace – it is on the Linux shell's own disk.*\/workspace\/<name>/);
+    expect(() => outsideWorkspace('/phone/a.txt')).toThrow(/phone_\* tools/);
+    expect(() => outsideWorkspace('/workspace/a.txt', 'src/a.js', '', undefined)).not.toThrow();
+    const w = { id: 'x', files: {} };
+    await expect(writeFileTool({ path: '/root/app/x.js', content: 'a' }, {}, w)).rejects.toThrow(/outside \/workspace/);
+    expect(Object.keys(w.files)).toEqual([]);
   });
 });

@@ -128,7 +128,7 @@ export const privateDefs = (on) => [
           {
             action: { type: 'string', enum: ['sms_search', 'calls'] },
             query: { type: 'string', description: 'sms_search: words in the message' },
-            from: { type: 'string', description: 'sms_search: the sender (number or name, e.g. DHL)' },
+            from: { type: 'string', description: "sms_search: the sender – a number, a sender name (DHL), or a contact's name (Mom: their numbers are searched)" },
             since: { type: 'string', description: 'only after this date or date-time, e.g. 2026-11-10' },
             limit: { type: 'integer', description: `at most this many (default 10; sms at most ${SMS_MAX}, calls at most ${CALLS_MAX})` },
           },
@@ -269,10 +269,14 @@ export async function runPrivateTool(name, args = {}, ctx = {}) {
         const lines = list.map((m) => {
           const body = cleanText(m.body, SMS_CHARS, priv.showCodes);
           masked += body.masked;
-          return `${stamp(m.date)} · ${m.type === 'sent' ? `to ${clip(m.address, 40)}` : `from ${clip(m.address, 40)}`}${m.read === false ? ' · unread' : ''}\n  ${body.text}`;
+          const who = [clip(m.name, 50), clip(m.address, 40)].filter(Boolean).join(' ');
+          return `${stamp(m.date)} · ${m.type === 'sent' ? `to ${who}` : `from ${who}`}${m.read === false ? ' · unread' : ''}\n  ${body.text}`;
         });
-        if (!list.length) return { ok: true, result: `No text messages ${what.replace(/^for /, 'match ')}${sinceTxt}.`, display: { path: `texts ${query || from}`.trim(), count: 0 } };
-        return { ok: true, result: `${list.length} text message${list.length === 1 ? '' : 's'} ${what.replace(/^for /, 'matching ')}${sinceTxt}, newest first${masked ? ` (${masked} one-time code${masked === 1 ? '' : 's'} hidden)` : ''}. ${UNTRUSTED}\n\n${lines.join('\n')}`, display: { path: `texts ${query || from}`.trim(), count: list.length } };
+        // a name in from is matched to the numbers of contacts with that name (decision 270): which ones, said
+        const via = Array.isArray(r?.contacts) && r.contacts.length ? ` (“${from}” matched the contact${r.contacts.length === 1 ? '' : 's'} ${r.contacts.slice(0, 5).map((c) => `${clip(c.name, 40)} ${clip(c.number, 30)}`).join(', ')})` : '';
+        const noName = from && /\p{L}/u.test(from) && !via ? ` A name in from matches a sender shown as that name (a company), or the numbers of a contact with that name – none was found${r?.contacts === undefined ? ' (or the app may not read contacts)' : ''}; try the number.` : '';
+        if (!list.length) return { ok: true, result: `No text messages ${what.replace(/^for /, 'match ')}${sinceTxt}${via}.${noName}`, display: { path: `texts ${query || from}`.trim(), count: 0 } };
+        return { ok: true, result: `${list.length} text message${list.length === 1 ? '' : 's'} ${what.replace(/^for /, 'matching ')}${sinceTxt}${via}, newest first${masked ? ` (${masked} one-time code${masked === 1 ? '' : 's'} hidden)` : ''}. ${UNTRUSTED}\n\n${lines.join('\n')}`, display: { path: `texts ${query || from}`.trim(), count: list.length } };
       } catch (e) {
         return failed(e, 'sms search');
       }

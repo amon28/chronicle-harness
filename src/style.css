@@ -1054,6 +1054,9 @@ html, body { overflow-x: hidden; }
 .todo-list { list-style: none; margin: 4px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.875rem; }
 .todo-list li.todo-done { color: var(--text-3); text-decoration: line-through; }
 .todo-list li.todo-in_progress { font-weight: 600; }
+.grants-list { list-style: none; margin: 4px 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 0.875rem; }
+.grants-list .grant-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.grants-list .grant-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .todo-list.big { font-size: 0.9375rem; gap: 8px; margin: 8px 0 12px; }
 .ask-question { font-size: 1rem; font-weight: 600; margin: 4px 0 10px; white-space: pre-wrap; max-height: 50vh; overflow: auto; }
 

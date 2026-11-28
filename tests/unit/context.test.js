@@ -59,6 +59,16 @@ describe('searching earlier chats', () => {
     expect(searchChats(convs, 'weather')[0].snippet).toMatch(/weather app with flask/);
     expect(searchChats(convs, '')).toEqual([]);
   });
+  it('a word matches where a word starts, and since / before keep to the messages of those dates (decision 270)', () => {
+    const more = [...convs, { id: 'c4', title: 'Moving', messages: [{ role: 'user', content: 'locate the education office', at: 10 }, { role: 'user', content: 'the cat is ill', at: 50 }] }];
+    expect(searchChats(more, 'cat').map((h) => h.id)).toEqual(['c4']);
+    expect(searchChats(more, 'cat')[0].snippet).toMatch(/the cat is ill/);
+    expect(searchChats(more, 'educ').map((h) => h.id)).toEqual(['c4']); // the start of a word still finds it
+    expect(searchChats(more, 'cate')).toEqual([]); // not in the middle of one
+    expect(searchChats(more, 'flask', { since: 3 }).map((h) => h.id)).toEqual(['c3']);
+    expect(searchChats(more, 'flask', { before: 3 }).map((h) => h.id)).toEqual(['c1']);
+    expect(searchChats(more, 'cat', { before: 20 })).toEqual([]);
+  });
   it('reads a chat as text, with the tools it used and paging', () => {
     const t = chatTranscript(convs[2]);
     expect(t).toMatch(/#0 User: add a login page/);

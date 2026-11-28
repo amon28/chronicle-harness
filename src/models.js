@@ -3,8 +3,20 @@
 
 export const isFree = (m) => {
   const c = m?.cost?.text;
-  return (c?.input?.price === 0 && (c?.output?.price ?? 0) === 0) || /(^|-)free$/.test(m?.id || '');
+  // OpenRouter-style ids end in ":free" (deepseek/deepseek-r1:free), OpenCode's in "-free" (decision 275)
+  return (c?.input?.price === 0 && (c?.output?.price ?? 0) === 0) || /(^|[-:])free$/.test(m?.id || '');
 };
+
+/**
+ * Is there any model to chat with (decision 275)? An OpenCode Go key, or – without one – a model from somewhere else
+ * in the list (a custom endpoint, Zen's free models, the on-device model: they carry a source; OpenCode Go's do not,
+ * and a cached list can still hold them from before the key was removed), or Claude Code set up (ccModels).
+ */
+export function hasUsableModel(settings = {}, models = [], ccModels = []) {
+  if (settings.apiKey) return true;
+  if ((models || []).some((m) => m?.source && m.source !== 'claudecode')) return true;
+  return (ccModels || []).length > 0;
+}
 
 /** "Contributor" models need "Allow paid endpoints that train on request data" in the OpenCode Console. */
 export const isContributor = (m) => /contributor/i.test(m?.id || '');

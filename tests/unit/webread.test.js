@@ -10,7 +10,29 @@ vi.mock('../../src/api.js', () => ({
     return typeof hit[1] === 'function' ? hit[1](url, headers) : hit[1];
   }),
   canFetchAnySite: true,
+  bytesRequest: vi.fn(async ({ url }) => {
+    const hit = Object.entries(routes).find(([k]) => url === k || url.startsWith(k));
+    return hit?.[1]?.bytes ? { status: 200, headers: {}, body: hit[1].bytes } : { status: 404, headers: {}, body: new Uint8Array() };
+  }),
 }));
+/** A small real PDF with one line of text on each page. */
+function makePdf(lines) {
+  const objs = ['<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${lines.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}] /Count ${lines.length} >>`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+  lines.forEach((t, i) => {
+    const stream = `BT /F1 18 Tf 72 720 Td (${t}) Tj ET`;
+    objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`);
+    objs.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  });
+  let out = '%PDF-1.4\n';
+  const offs = [];
+  objs.forEach((o, i) => {
+    offs.push(out.length);
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const x = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join('')}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF\n`;
+  return new TextEncoder().encode(out);
+}
 // no DOM in the unit-test environment: a tiny stand-in for the article extractor
 vi.mock('../../src/websearch.js', async (orig) => ({
   ...(await orig()),
@@ -98,5 +120,31 @@ describe('helpers', () => {
     expect(none.note).toContain('NO result matched');
     expect(enforceOperators('-site:x.org filetype:pdf q', results).results).toHaveLength(0);
     expect(enforceOperators('plain query', results).results).toHaveLength(3);
+  });
+});
+
+describe('a PDF is read, not only named (decision 270)', () => {
+  it('fetch_url takes the text out of a PDF, page by page', async () => {
+    const pdf = makePdf(['Quarterly results are up', 'Second page here']);
+    routes['https://example.com/r.pdf'] = { status: 200, body: new TextDecoder('latin1').decode(pdf), bytes: pdf };
+    const r = await readUrl('https://example.com/r.pdf', { render: 'static' });
+    expect(r.ok).toBe(true);
+    expect(r.type).toBe('pdf');
+    expect(r.note).toBe('PDF, 2 pages');
+    expect(r.text).toMatch(/--- Page 1 ---\nQuarterly results are up[\s\S]*--- Page 2 ---\nSecond page here/);
+  }, 30000);
+});
+
+describe("an address on the user's network (decision 271)", () => {
+  it('is refused, and says how to ask; allowed for the chat, it is read directly and never sent to the renderer', async () => {
+    routes['http://192.168.1.20/'] = { status: 200, body: ARTICLE };
+    const no = await readUrl('http://192.168.1.20/');
+    expect(no.reason).toBe('local');
+    expect(no.note).toMatch(/local_network action request/);
+    expect(calls).toEqual([]);
+    const yes = await readUrl('http://192.168.1.20/', { lanAllow: ['192.168.1.20'] });
+    expect(yes.ok).toBe(true);
+    expect(calls.map((c) => c.url)).toEqual(['http://192.168.1.20/']); // no r.jina.ai
+    expect((await readUrl('http://192.168.1.21/', { lanAllow: ['192.168.1.20'] })).reason).toBe('local');
   });
 });

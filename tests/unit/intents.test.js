@@ -46,3 +46,27 @@ describe('list_apps', () => {
     expect(r.result).toBe('No app matches "chronicle". (Chronicle itself is never listed: it is the app you are running in.)');
   });
 });
+
+describe('an alarm says which day it rings (decision 270)', () => {
+  const at = (iso) => ({ now: Date.parse(iso) });
+  it('today when the time is still to come, tomorrow when it has passed', () => {
+    expect(buildIntent({ kind: 'alarm', hour: 9, minute: 0 }, at('2026-11-27T08:00:00')).summary).toMatch(/^Set an alarm for 09:00 today, Fri, Nov 27\?$/);
+    expect(buildIntent({ kind: 'alarm', hour: 7, minute: 0 }, at('2026-11-27T08:00:00')).summary).toMatch(/^Set an alarm for 07:00 tomorrow, Sat, Nov 28\?$/);
+  });
+  it('repeating days go to Android as its day numbers, and are said in order', () => {
+    const b = buildIntent({ kind: 'alarm', hour: 6, minute: 30, days: ['fri', 'mon', 'wed'] });
+    expect(b.intent.extras['android.intent.extra.alarm.DAYS']).toEqual([6, 2, 4]);
+    expect(b.summary).toBe('Set an alarm for 06:30 every Mon, Wed, Fri?');
+  });
+});
+
+describe('deep links (decision 276)', () => {
+  it("opens an app's own scheme after asking, never a file, content or raw intent link", () => {
+    const b = buildIntent({ kind: 'deep_link', url: 'homeassistant://navigate/lovelace', package: 'io.homeassistant.companion.android' });
+    expect(b.intent).toEqual({ action: 'android.intent.action.VIEW', data: 'homeassistant://navigate/lovelace', deepLink: true, package: 'io.homeassistant.companion.android' });
+    expect(b.summary).toMatch(/^Open this link in io\.homeassistant\.companion\.android\?/);
+    for (const u of ['file:///sdcard/x', 'content://x/y', 'intent://x#Intent;end', 'javascript:alert(1)']) expect(() => buildIntent({ kind: 'deep_link', url: u })).toThrow();
+    expect(() => buildIntent({ kind: 'deep_link', url: 'https://example.com' })).toThrow(/open_url/);
+    expect(buildIntent({ kind: 'settings', page: 'developer' }).intent.action).toBe('android.settings.APPLICATION_DEVELOPMENT_SETTINGS');
+  });
+});

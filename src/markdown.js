@@ -10,18 +10,26 @@ marked.setOptions({ gfm: true, breaks: true });
 // ---------- math: $…$, $$…$$, \(…\), \[…\] → placeholders rendered later by KaTeX ----------
 const escAttr = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const mathEl = (tex, block) => `<${block ? 'div' : 'span'} class="math${block ? ' math-block' : ''}" data-tex="${escAttr(tex)}">${escAttr(tex)}</${block ? 'div' : 'span'}>`;
+const MATH_ENVS = 'align|aligned|equation|gather|gathered|multline|alignat|cases|matrix|pmatrix|bmatrix|split';
 marked.use({
   extensions: [
     {
       name: 'mathBlock',
       level: 'block',
       start(src) {
-        const i = src.search(/\$\$|\\\[/);
+        let i = src.search(/\$\$|\\\[/);
+        // \begin{…} only at the start of a line: inside a $…$ formula it stays part of that formula
+        const b = /(?:^|\n)[ \t]*(\\begin\{)/.exec(src);
+        const at = b ? b.index + b[0].length - b[1].length : -1;
+        if (at >= 0 && (i < 0 || at < i)) i = at;
         return i < 0 ? undefined : i;
       },
       tokenizer(src) {
         const m = /^\$\$([\s\S]+?)\$\$[ \t]*(?:\n|$)/.exec(src) || /^\\\[([\s\S]+?)\\\][ \t]*(?:\n|$)/.exec(src);
         if (m) return { type: 'mathBlock', raw: m[0], text: m[1].trim() };
+        // a bare \begin{align}…\end{align} (no $$ around it) is display maths too (decision 275)
+        const env = new RegExp(`^[ \\t]{0,3}\\\\begin\\{(${MATH_ENVS})(\\*?)\\}[\\s\\S]+?\\\\end\\{\\1\\2\\}[ \\t]*(?:\\n|$)`).exec(src);
+        if (env) return { type: 'mathBlock', raw: env[0], text: env[0].trim() };
       },
       renderer: (t) => mathEl(t.text, true),
     },
@@ -51,6 +59,103 @@ marked.use({
     },
   ],
 });
+
+// ---------- what marked would take for HTML but is not (decision 275) ----------
+// `vector<int>`, `#include <iostream>`, `<T>`, `HashMap<String, List<Integer>>` outside code were parsed by marked as
+// HTML tags, and DOMPurify then removed them – the reply lost them. Before marked, a `<name…>` outside code spans,
+// fences and formulas is escaped when name is not an HTML (or SVG/MathML) tag DOMPurify keeps; a real tag right
+// after a word (`List<b>`) is escaped too unless its closing tag follows. Real HTML (<details>, <br>, <kbd>…) works,
+// and so does a made-up tag that is opened and closed (<scene>…</scene>: its text shows, as before).
+const HTML_TAGS = new Set(
+  ('a abbr acronym address area article aside audio b bdi bdo big blink blockquote body br button canvas caption center cite code col colgroup ' +
+    'content data datalist dd decorator del details dfn dialog dir div dl dt element em fieldset figcaption figure font footer form h1 h2 h3 h4 h5 h6 ' +
+    'head header hgroup hr html i img input ins kbd label legend li main map mark marquee menu menuitem meter nav nobr ol optgroup option output p ' +
+    'picture pre progress q rp rt ruby s samp section select shadow small source spacer span strike strong style sub summary sup table tbody td ' +
+    'template textarea tfoot th thead time tr track tt u ul var video wbr svg g path circle rect line polyline polygon ellipse text tspan defs ' +
+    'lineargradient radialgradient stop use symbol clippath mask pattern filter image title desc math mi mn mo ms mrow msup msub mfrac msqrt semantics ' +
+    'annotation script iframe object embed link meta base noscript frame frameset')
+    .split(' '),
+);
+const TAG_RX = /<(\/?)([A-Za-z][\w-]*)(?=[\s/>,])/g;
+function escapeTagsIn(seg, whole) {
+  return seg.replace(TAG_RX, (m, close, name, at, str) => {
+    const n = name.toLowerCase();
+    // an unknown tag that is opened and closed (<scene>…</scene>) is left to DOMPurify as before: its text stays, the tags go
+    if (!HTML_TAGS.has(n)) return new RegExp(`</${n}\\s*>`, 'i').test(whole) && new RegExp(`<${n}[\\s>]`, 'i').test(whole) ? m : '&lt;' + close + name;
+    if (!close && /[\w$]/.test(str[at - 1] || '') && !new RegExp(`</${n}\\s*>`, 'i').test(whole)) return '&lt;' + name;
+    return m;
+  });
+}
+/** Escape stray `<word>` outside code (fenced, indented, `spans`) and maths, so marked leaves them as text. */
+export function escapeStrayTags(text) {
+  const src = String(text || '');
+  if (!src.includes('<')) return src;
+  const lines = src.split('\n');
+  let fence = null;
+  const out = [];
+  let prose = [];
+  const flush = () => {
+    if (!prose.length) return;
+    const block = prose.join('\n');
+    // code spans and formulas are kept as they are
+    out.push(block.replace(/(`+)[\s\S]*?[^`]\1(?!`)|`[^`]`|\$\$[\s\S]*?\$\$|(?<![\p{L}\p{N}\\])\$[^$\n]+\$|\\\([\s\S]*?\\\)|([^`$\\]+|[`$\\])/gu, (m, _t, plain) => (plain ? escapeTagsIn(plain, src) : m)));
+    prose = [];
+  };
+  for (const l of lines) {
+    const f = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(l);
+    if (fence) {
+      out.push(l);
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length && !l.trim().slice(f[1].length).trim()) fence = null;
+      continue;
+    }
+    if (f) {
+      flush();
+      fence = f[1];
+      out.push(l);
+      continue;
+    }
+    // indented code (4 spaces or a tab, not a nested list item) stays as written
+    if (/^( {4,}|\t)/.test(l) && !/^\s+([-*+]|\d+[.)])\s/.test(l) && (!prose.length || !prose.at(-1).trim())) {
+      flush();
+      out.push(l);
+      continue;
+    }
+    prose.push(l);
+  }
+  flush();
+  return out.join('\n');
+}
+
+/**
+ * A `|` inside $…$ in a table row split the cell: `| $P(a|b)$ | x |` had three cells. It is written `\|` there,
+ * which the table takes as a literal bar and gives back to the formula as `|` (decision 275).
+ */
+export function protectTableMath(text) {
+  const src = String(text || '');
+  if (!src.includes('|') || !src.includes('$')) return src;
+  let fence = null;
+  return src
+    .split('\n')
+    .map((l) => {
+      const f = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(l);
+      if (fence) {
+        if (f && f[1][0] === fence[0]) fence = null;
+        return l;
+      }
+      if (f) {
+        fence = f[1];
+        return l;
+      }
+      if (!/^\s*\|.*\|\s*$/.test(l)) return l;
+      return l.replace(/(`+)[\s\S]*?\1|\$\$[^$]+\$\$|(?<![\p{L}\p{N}\\])\$[^$\n]+\$/gu, (m, tick) => (tick ? m : m.replace(/(?<!\\)\|/g, '\\|')));
+    })
+    .join('\n');
+}
+
+/** Markdown → HTML before sanitizing (what renderMarkdown gives DOMPurify). */
+export function markdownHtml(text) {
+  return marked.parse(protectTableMath(escapeStrayTags(text || '')));
+}
 
 const ALIASES = { js: 'javascript', ts: 'typescript', py: 'python', sh: 'bash', shell: 'bash', zsh: 'bash', yml: 'yaml', md: 'markdown', html: 'xml', htm: 'xml', svg: 'xml', vue: 'xml', jsonc: 'json', kt: 'kotlin', rs: 'rust', rb: 'ruby', cs: 'csharp', 'c++': 'cpp' };
 
@@ -118,7 +223,7 @@ function highlight(codeEl, lang, allowAuto) {
 
 // ---------- HTML-styled text (character cards often have a designed description / greeting) ----------
 const RISKY_STYLE = /position\s*:\s*(fixed|sticky)|expression\s*\(|behavior\s*:|-moz-binding|url\(\s*['"]?(?!data:image\/)/i;
-DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+DOMPurify.addHook?.('afterSanitizeAttributes', (node) => {
   const st = node.getAttribute?.('style');
   if (st && RISKY_STYLE.test(st)) node.setAttribute('style', st.split(';').filter((d) => !RISKY_STYLE.test(d)).join(';'));
 });
@@ -142,7 +247,7 @@ const LANG_LABEL = { xml: 'html', javascript: 'js', typescript: 'ts', python: 'p
  * opts.wrap: wrap long lines in code boxes by default
  */
 export function renderMarkdown(text, opts = {}) {
-  const html = isRichHtml(text) ? richHtml(text) : DOMPurify.sanitize(marked.parse(text || ''));
+  const html = isRichHtml(text) ? richHtml(text) : DOMPurify.sanitize(markdownHtml(text));
   const div = document.createElement('div');
   div.innerHTML = html;
   // the code box still being written is left uncoloured until its closing ``` arrives: colouring it again on every
@@ -266,10 +371,15 @@ function colorDialogue(root) {
   }
 }
 
+const ERROR_LINE =
+  /^\s*(\S+\.\w+:\d+(:\d+)?:\s*(fatal )?(error|warning)\b|Traceback \(most recent call last\)|Exception in thread "|error(\[E\d+\])?: |error TS\d+:|\S+\.\w+\(\d+,\d+\): error|[A-Z][A-Za-z]*(Error|Exception): |at [\w$.<>]+\([\w$.]*:\d+(:\d+)?\)\s*$|Segmentation fault|thread '[^']*' panicked at )/;
+
 /** Heuristic: does unfenced user text look like a code paste? */
 export function looksLikeCode(text) {
   if (!text || text.includes('```')) return false;
   const lines = text.split('\n').filter((l) => l.trim());
+  // a pasted compiler or runtime error is fenced even when it is one or two lines (decision 275)
+  if (lines.some((l) => ERROR_LINE.test(l))) return true;
   if (lines.length < 3) return false;
   let score = 0;
   for (const l of lines) {

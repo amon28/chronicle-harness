@@ -10,7 +10,7 @@ test.describe('tools', () => {
     await app.click('#mode-btn');
     await app.locator('#perm-options .menu-item[data-perm="ask"]').click();
     await app.click('#send-btn');
-    await expect(app.locator('#ask-question')).toContainText('Allow write_file (a script)', { timeout: 15000 });
+    await expect(app.locator('#ask-question')).toContainText('Allow ✏️ Write files (a script)', { timeout: 15000 });
     // nobody answers; the script's 2 s pass and the reply finishes
     await expect(app.locator('.msg.assistant').last()).toContainText('RESULTS:', { timeout: 15000 });
     await idle(app);

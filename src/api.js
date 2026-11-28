@@ -242,6 +242,8 @@ export async function listProviderModels(p) {
         limit: { context: a.context, output: a.output },
         capabilities: { tools: { supported: a.tools }, reasoning: { supported: a.reasoning } },
         modalities: { input: a.vision ? ['text', 'image/jpeg', 'image/png'] : ['text'] },
+        // the price the provider lists (OpenRouter's pricing) – usage priced these at $0 before (decision 275)
+        ...(a.cost ? { cost: a.cost } : {}),
         type: 'chat',
       };
     }),
@@ -354,7 +356,7 @@ export function httpRequest(url, { method = 'GET', headers = {}, body = null, ti
 }
 
 /** One request with a binary body and answer (git). → { status, headers, body: Uint8Array } */
-export async function bytesRequest({ url, method = 'GET', headers = {}, body = null }) {
+export async function bytesRequest({ url, method = 'GET', headers = {}, body = null, guard = false, lanAllow = [] }) {
   if (!isNative) {
     const r = await fetch(url, { method, headers, body });
     return { status: r.status, headers: Object.fromEntries([...r.headers].map(([k, v]) => [k.toLowerCase(), v])), body: new Uint8Array(await r.arrayBuffer()) };
@@ -364,13 +366,13 @@ export async function bytesRequest({ url, method = 'GET', headers = {}, body = n
     for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
     return btoa(s);
   };
-  const r = await GoStream.fetchBytes({ url, method, headers, ...(body ? { bodyB64: b64(body) } : {}) });
+  const r = await GoStream.fetchBytes({ url, method, headers, ...(body ? { bodyB64: b64(body) } : {}), ...(guard ? { guard: true } : {}), ...(lanAllow.length ? { lanAllow } : {}) });
   return { status: r.status, headers: r.headers || {}, body: await bridgeBytes(r, { b64Key: 'bodyB64', pathKey: 'bodyPath' }) }; // a big answer comes as a file
 }
 
 /** GET any URL. Android: native HTTP (no CORS, custom User-Agent). Browser: fetch (CORS applies). */
-export function httpGet(url, headers = {}, timeoutMs = 20000) {
-  if (isNative) return nativeGet(url, headers, timeoutMs);
+export function httpGet(url, headers = {}, timeoutMs = 20000, { lanAllow = [] } = {}) {
+  if (isNative) return nativeGet(url, headers, timeoutMs, lanAllow);
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   const { 'User-Agent': _ua, ...h } = headers; // browsers don't allow setting it
@@ -386,7 +388,7 @@ async function webGet(url, headers) {
 }
 
 /** Plain GET through the native GoStream plugin (no CORS). Resolves { status, body }. */
-function nativeGet(url, headers, timeoutMs = 20000) {
+function nativeGet(url, headers, timeoutMs = 20000, lanAllow = []) {
   return new Promise((resolve, reject) => {
     const id = `get-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let body = '';
@@ -411,7 +413,7 @@ function nativeGet(url, headers, timeoutMs = 20000) {
       }),
     );
     Promise.all(subs)
-      .then(() => GoStream.start({ id, url, headers, guard: true }))
+      .then(() => GoStream.start({ id, url, headers, guard: true, ...(lanAllow.length ? { lanAllow } : {}) }))
       .catch((err) => end(() => reject(err)));
   });
 }

@@ -91,7 +91,11 @@ public class IntentsPlugin extends Plugin {
                     Uri u = Uri.parse(data);
                     String sch = u.getScheme() == null ? "" : u.getScheme();
                     // VIEW only for web pages and the map (a place, or directions to one); nothing that reaches into files or other apps' content
-                    if (Intent.ACTION_VIEW.equals(action) && !(sch.equals("http") || sch.equals("https") || sch.equals("geo") || sch.equals("google.navigation"))) {
+                    // a deep link the user confirmed (decision 276: myapp://, homeassistant://, market://) – any app's own
+                    // scheme, but never one that reaches into files, content or a raw intent
+                    boolean deep = Boolean.TRUE.equals(call.getBoolean("deepLink", false)) && sch.matches("^[a-z][a-z0-9+.-]{1,40}$")
+                        && !java.util.Arrays.asList("file", "content", "intent", "javascript", "data", "jar", "android-app", "android.resource", "blob", "about").contains(sch);
+                    if (Intent.ACTION_VIEW.equals(action) && !deep && !(sch.equals("http") || sch.equals("https") || sch.equals("geo") || sch.equals("google.navigation"))) {
                         call.reject("That address is not allowed");
                         return;
                     }
@@ -102,6 +106,8 @@ public class IntentsPlugin extends Plugin {
                     String type = call.getString("type");
                     if (type != null) i.setDataAndType(u, type);
                     else i.setData(u);
+                    String pkg = call.getString("package");
+                    if (deep && pkg != null && pkg.matches("^[a-zA-Z][\\w]*(\\.[a-zA-Z_][\\w]*)+$")) i.setPackage(pkg);
                 } else if (call.getString("type") != null) i.setType(call.getString("type"));
                 JSObject ex = call.getObject("extras", new JSObject());
                 for (Iterator<String> it = ex.keys(); it.hasNext(); ) {
@@ -114,6 +120,13 @@ public class IntentsPlugin extends Plugin {
                         double d = (Double) v; // a whole number stays a long (alarm hours, minutes), a fraction stays a double
                         if (d == Math.rint(d) && Math.abs(d) < 9e15) i.putExtra(k, (long) d);
                         else i.putExtra(k, d);
+                    }
+                    else if (v instanceof org.json.JSONArray) {
+                        // a list of whole numbers (an alarm's days) as Android wants it: an ArrayList<Integer>
+                        org.json.JSONArray arr = (org.json.JSONArray) v;
+                        java.util.ArrayList<Integer> list = new java.util.ArrayList<>();
+                        for (int j = 0; j < arr.length(); j++) list.add(arr.optInt(j));
+                        i.putIntegerArrayListExtra(k, list);
                     }
                     else if (v != null) i.putExtra(k, String.valueOf(v));
                 }

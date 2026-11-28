@@ -1470,11 +1470,23 @@ hooks.creator = {
   read: (q) => {
     const p = findPersona(personas(), q).persona;
     if (!p) return null;
-    return { id: p.id, name: p.name, builtin: !!p.builtin, character: !!p.cardMode, description: p.description || '', prompt: p.cardMode ? '' : p.prompt, card: p.cardMode ? { ...p.card, character_book: undefined } : null, lorebook: p.lorebookId ? lorebookById(p.lorebookId) : null, tools: p.tools ?? null, toolset: p.toolset ? TOOL_GROUPS.map(([k]) => k).filter((k) => p.toolset[k] !== false) : 'all', add_tools: p.toolPicks?.on || [], remove_tools: p.toolPicks?.off || [] };
+    return { id: p.id, name: p.name, builtin: !!p.builtin, character: !!p.cardMode, description: p.description || '', prompt: p.cardMode ? '' : p.prompt, card: p.cardMode ? { ...p.card, character_book: undefined } : null,
+      // a persona that is not a card keeps its greeting in a small card of its own (decision 265)
+      ...(p.cardMode ? {} : { roleplay: !!p.rp, greeting: p.card?.first_mes || '', alternate_greetings: p.card?.alternate_greetings || [] }), lorebook: p.lorebookId ? lorebookById(p.lorebookId) : null, tools: p.tools ?? null, toolset: p.toolset ? TOOL_GROUPS.map(([k]) => k).filter((k) => p.toolset[k] !== false) : 'all', add_tools: p.toolPicks?.on || [], remove_tools: p.toolPicks?.off || [] };
   },
-  edit: async (id, { persona, card, tools, toolset, toolPicks }) => {
+  /** Its picture: { url (a data URL), kind: 'card art' | 'avatar' } – the full card art, else the avatar picture; null for an
+   * emoji avatar (decision 266). */
+  picture: async (id) => {
+    const p = personas().find((x) => x.id === id);
+    if (!p) return null;
+    const full = p.hasArt ? await art.get(p.id).catch(() => null) : null;
+    if (full) return { url: full, kind: 'card art' };
+    return p.avatar?.image ? { url: p.avatar.image, kind: 'avatar' } : null;
+  },
+  edit: async (id, { persona, card, tools, toolset, toolPicks, image }) => {
     const t = personas().find((x) => x.id === id);
     if (!t) throw new Error('That persona no longer exists');
+    if (image) await setPersonaPicture(t, image); // a picture the user sent (decision 265)
     if (card) {
       const c = { ...(t.card || {}), ...card, character_book: undefined };
       Object.assign(t, { name: c.name || t.name, description: (c.creator_notes || c.description || '').replace(/\s+/g, ' ').slice(0, 80), prompt: cardPrompt(c), card: c });
@@ -1484,6 +1496,10 @@ hooks.creator = {
       if (persona.description != null) t.description = persona.description;
       if (persona.prompt != null) t.prompt = persona.prompt;
       if (persona.emoji) t.avatar = { ...(t.avatar || {}), emoji: persona.emoji };
+      // its greeting and extra greetings, only when they changed (a persona without any gets no card for nothing)
+      const alt = persona.alternate_greetings || [];
+      if (persona.greeting != null && (persona.greeting !== (t.card?.first_mes || '') || JSON.stringify(alt) !== JSON.stringify(t.card?.alternate_greetings || [])))
+        t.card = { ...(t.card || {}), first_mes: persona.greeting, alternate_greetings: alt };
     }
     if (typeof tools === 'boolean') t.tools = tools;
     if (Array.isArray(toolset)) t.toolset = toolsetFrom(toolset);

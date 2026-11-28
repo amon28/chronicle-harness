@@ -135,6 +135,8 @@ export async function settle(job, softMs) {
 }
 
 export const isRunning = (job) => !!job && !job.finishedAt;
+/** Is any shell job still running? (the app stays alive for it, decision 276) */
+export const anyJobRunning = () => [...jobs.values()].some((j) => !j.finishedAt);
 
 /** A job as the model and the UI see it: status, exit code, elapsed time and the last N lines. */
 export function jobSnapshot(job, { lines = 80, full = false } = {}) {

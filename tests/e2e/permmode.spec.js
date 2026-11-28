@@ -9,7 +9,7 @@ test('one switch: Ask first makes every change wait for an OK; Plan turns plan m
   await expect(app.locator('#mode-btn')).toHaveText('🛡 Ask first');
   await app.fill('#input', 'PATCHME please');
   await app.click('#send-btn');
-  await expect(app.locator('#ask-question')).toContainText('Allow write_file');
+  await expect(app.locator('#ask-question')).toContainText('Allow ✏️ Write files');
   // every change in the turn asks (the patch after the write too); say no to each
   for (let i = 0; i < 10 && (await app.evaluate(() => document.body.classList.contains('streaming'))); i++) {
     const deny = app.locator('#ask-options button', { hasText: 'Deny' });

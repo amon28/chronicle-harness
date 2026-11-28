@@ -38,7 +38,9 @@ describe('the roleplay_presets tool', () => {
     const asked = [];
     const r = await runCreatorTool('roleplay_presets', { action: 'create', name: 'Noir', from: 'Vivid', set: { rpNote: 'Rain, always rain.', samplers: { temperature: 0.7 } }, make_default: true }, host(s, asked));
     expect(r.ok).toBe(true);
-    expect(asked[0]).toMatch(/Make a roleplay preset “Noir”, a copy of “Vivid” with rpNote, samplers changed, and make it the default/);
+    // what the user reads names the fields in words (decision 270); the model is told where it reaches a chat
+    expect(asked[0]).toMatch(/Make a roleplay preset “Noir”, a copy of “Vivid” with author's note, samplers \(temperature, length…\) changed, and make it the default/);
+    expect(r.result).toMatch(/picked in that chat's settings \(🎛 Roleplay preset\), or when it is the default for roleplays; the change applies from the next reply\.$/);
     const noir = s.rpPresets.find((p) => p.name === 'Noir');
     expect(noir).toMatchObject({ rpPhi: 'Lush prose, 3 paragraphs.', rpNote: 'Rain, always rain.', samplers: { temperature: 0.7 } });
     expect(s.rpPresetId).toBe(noir.id);

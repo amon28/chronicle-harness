@@ -54,13 +54,14 @@ export const creatorDefs = () => [
   ),
   fn(
     'edit_persona',
-    `Change part of an existing chat persona or roleplay character – the rest stays exactly as it is. Use this (not save_persona / save_character) to adjust something: a detail in the description, the tone of the prompt, one more greeting, the tools. Call read_persona first to see the current text. "edits" are exact text replacements inside one field (old_text must match exactly, like edit_file); "set" replaces whole fields. Fields – chat persona: ${PERSONA_FIELDS.join(', ')}; character: ${CARD_FIELDS.join(', ')}. The user approves the change first.`,
+    `Change part of an existing chat persona or roleplay character – the rest stays exactly as it is. Use this (not save_persona / save_character) to adjust something: a detail in the description, the tone of the prompt, the first message (greeting), extra greetings, the character's note, the picture, the tools. Call read_persona first to see the current text. "edits" are exact text replacements inside one field (old_text must match exactly, like edit_file); "set" replaces whole fields. Fields – persona: ${PERSONA_FIELDS.join(', ')} (greeting = the first message a roleplay with it opens with; alternate_greetings = the other first messages, swiped on it); character (a full card): ${CARD_FIELDS.join(', ')} (first_mes = the greeting; depth_prompt = the character's note, as text). Greetings can be added and removed with add_greetings / remove_greetings on both. The user approves the change first.`,
     {
       persona: { type: 'string', description: 'Name or id (from list_personas)' },
       edits: { ...EDIT_LIST, description: 'Exact replacements: [{field, old_text, new_text}] – field defaults to prompt (persona) or description (character)' },
       set: { type: 'object', description: 'Whole fields to replace, e.g. {"scenario": "…", "tags": ["fantasy"]}' },
-      add_greetings: { type: 'array', items: { type: 'string' }, description: 'Character: extra greetings to add' },
-      remove_greetings: { type: 'array', items: { type: 'integer' }, description: 'Character: numbers (1-based) of extra greetings to remove' },
+      add_greetings: { type: 'array', items: { type: 'string' }, description: 'Extra greetings (alternate first messages) to add' },
+      remove_greetings: { type: 'array', items: { type: 'integer' }, description: 'Numbers (1-based, as read_persona lists them) of extra greetings to remove' },
+      image: { ...IMAGE_ARG, description: 'Optional: make a picture the user sent in this chat its picture (1 = the most recent image they sent, 2 = the one before…)' },
       delete: { type: 'boolean', description: 'Delete this persona or character entirely (with its memories; asks first). Built-ins cannot be deleted.' },
       ...TOOLS_ARGS,
     },
@@ -79,7 +80,12 @@ export const creatorDefs = () => [
     ['lorebook'],
   ),
   fn('list_personas', "List the user's existing personas and roleplay characters (id, name, kind, whether built-in, description). Call this before creating or changing one so you update the right thing instead of making a copy.", {}),
-  fn('read_persona', "Read one existing persona or character in full (system prompt, or the whole card and lorebook) by name or id, e.g. to improve it.", { persona: { type: 'string', description: 'Name or id' } }, ['persona']),
+  fn(
+    'read_persona',
+    "Read one existing persona or character in full (system prompt, or the whole card and lorebook) by name or id, e.g. to improve it. With picture: true you also see its picture (the full card art, or its avatar) – to describe it, write a greeting or description that fits it, or compare it with a new one.",
+    { persona: { type: 'string', description: 'Name or id' }, picture: { type: 'boolean', description: 'Also look at its picture (card art or avatar)' } },
+    ['persona'],
+  ),
   fn(
     'save_character',
     'Create a roleplay character for the user. Give the finished SillyTavern/Chub character card as JSON (chara_card_v2: {spec, spec_version, data:{name, description, personality, scenario, first_mes, mes_example, alternate_greetings, system_prompt, post_history_instructions, creator_notes, tags, character_book}}). An embedded character_book becomes the character\'s lorebook. The user is asked to approve first; it appears in their Roleplay list. To change a character later, call save_character again – a same-named character is updated only if the user agrees to add it as a new copy.',
@@ -148,6 +154,19 @@ function lookupError(q, found, ctx, wantCharacter) {
   return `No ${wantCharacter ? 'character' : 'persona'} called "${q}". Existing${wantCharacter ? ' characters' : ''}: ${names.join('; ') || 'none'}. Use one of these, or leave out "replace" to add a new one.${hint}`;
 }
 
+/** The persona asked for, read – or an error that lists what fits (several) or what exists (none), decision 270. */
+function readPersona(ctx, q) {
+  const p = ctx.creator.read(String(q || ''));
+  if (p) return p;
+  const found = ctx.creator.find?.(String(q || ''));
+  if (found?.ambiguous) throw new Error(`"${q}" fits several: ${found.ambiguous.join('; ')}. Use the exact name or the id.`);
+  const names = ctx.creator.list().map((x) => `${x.name} (${x.id})`);
+  throw new Error(`No persona or character called "${q}". ${names.length > 40 ? `The first 40 of ${names.length}` : 'There are'}: ${names.slice(0, 40).join('; ') || 'none'}${names.length > 40 ? ' – list_personas shows them all' : ''}.`);
+}
+
+/** Long JSON, cut with a marker that says so (it was cut silently, in the middle of a field). */
+const cutText = (text, max = 24000) => (text.length > max ? `${text.slice(0, max)}\n… [cut: ${text.length - max} more characters – ask for one field, e.g. read_persona and then edit_persona with only what changes]` : text);
+
 async function approve(ctx, summary, yes = 'Add it') {
   if (!ctx.ask) throw new Error('Creating things needs your approval, which is not available here.');
   ctx.onStatus?.('waiting for your approval…');
@@ -169,11 +188,11 @@ async function runPresetTool(args, ctx) {
     return { ok: true, result: lines.join('\n'), display: { path: String(l.length) } };
   }
   if (action === 'read') {
-    if (/^(standard)?$/i.test(String(args.preset || '').trim())) return { ok: true, result: JSON.stringify(presetView({ name: 'Standard', ...host.standard() }), null, 1).slice(0, 24000), display: { path: 'Standard' } };
+    if (/^(standard)?$/i.test(String(args.preset || '').trim())) return { ok: true, result: cutText(JSON.stringify(presetView({ name: 'Standard', ...host.standard() }), null, 1)), display: { path: 'Standard' } };
     const p = findPreset(presetList(s), args.preset);
     if (!p) throw new Error(`No preset “${args.preset}” – call list first`);
     if (p.ambiguous) throw new Error(`More than one preset matches: ${p.ambiguous.join(', ')} – give its id`);
-    return { ok: true, result: JSON.stringify(presetView(p, host.standard()), null, 1).slice(0, 24000), display: { path: p.name } };
+    return { ok: true, result: cutText(JSON.stringify(presetView(p, host.standard()), null, 1)), display: { path: p.name } };
   }
   const plan = planPresetChange(s, action, args, { standard: host.standard() });
   const yes = action === 'delete' ? 'Delete it' : action === 'create' ? 'Make it' : 'Change it';
@@ -184,7 +203,7 @@ async function runPresetTool(args, ctx) {
   return { ok: true, result: plan.result + model, display: { path: args.name || args.preset || '' } };
 }
 
-export async function runCreatorTool(name, args, ctx) {
+export async function runCreatorTool(name, args, ctx, deps = {}) {
   if (name === 'roleplay_presets') return runPresetTool(args, ctx);
   if (!ctx.creator) return { ok: false, result: 'Creating things is not available here.', display: { error: 'unavailable' } };
   if (name === 'list_personas') {
@@ -192,9 +211,24 @@ export async function runCreatorTool(name, args, ctx) {
     return { ok: true, result: l.map((p) => `${p.id} · ${p.name} · ${p.kind}${p.builtin ? ' · built-in' : ''}${p.lorebook ? ` · lorebook: ${p.lorebook}` : ''}${p.description ? ` · ${p.description}` : ''}`).join('\n') || 'No personas.', display: { path: String(l.length) } };
   }
   if (name === 'read_persona') {
-    const p = ctx.creator.read(String(args.persona || ''));
-    if (!p) throw new Error('No persona with that name or id – call list_personas');
-    return { ok: true, result: JSON.stringify(p, null, 1).slice(0, 24000), display: { path: p.name } };
+    const p = readPersona(ctx, args.persona);
+    const text = cutText(JSON.stringify(p, null, 1));
+    if (args.picture !== true) return { ok: true, result: text, display: { path: p.name } };
+    // its picture too (decision 266): the full card art, else the avatar; for a model that cannot see pictures, a vision
+    // model describes it (as view_images does)
+    const pic = await ctx.creator.picture?.(p.id);
+    if (!pic?.url) return { ok: true, result: `${text}\n\n[${p.name} has no picture – only an emoji avatar.]`, display: { path: p.name } };
+    const bytes = Uint8Array.from(atob(pic.url.split(',')[1] || ''), (c) => c.charCodeAt(0));
+    const label = `${p.name} – ${pic.kind}`;
+    const url = deps.shrinkImage ? await deps.shrinkImage(bytes, /^data:image\/jpe?g/.test(pic.url) ? 'picture.jpg' : 'picture.png') : pic.url;
+    const images = [{ path: label, url }];
+    if (!ctx.vision) {
+      if (!ctx.describeImages) return { ok: true, result: `${text}\n\n[It has a picture, but this model cannot see pictures and no vision model is available to describe it.]`, display: { path: p.name } };
+      ctx.onStatus?.('describing its picture…');
+      const d = await ctx.describeImages(images, `Describe this character picture of ${p.name} in detail: appearance, clothing, colours, pose, mood and style.`, ctx.signal);
+      return { ok: true, result: `${text}\n\n[Its picture, described by ${d.model} since you cannot see pictures directly:]\n${d.text}`, display: { path: p.name } };
+    }
+    return { ok: true, result: `${text}\n\nIts picture (${label}) is shown to you in the next message.`, images, display: { path: p.name } };
   }
   if (name === 'save_character') {
     const raw = asObject(args.card, 'card');
@@ -213,8 +247,7 @@ export async function runCreatorTool(name, args, ctx) {
     return { ok: true, result: `${r.updated ? 'Updated' : 'Added'} ${r.name}${r.lorebook ? ` with a ${r.lorebook}-entry lorebook` : ''}${image ? ' and the picture they sent' : ''}. The user finds it in their Roleplay list.`, display: { path: r.name } };
   }
   if (name === 'edit_persona') {
-    const cur = ctx.creator.read(String(args.persona || ''));
-    if (!cur) throw new Error('No persona or character with that name or id – call list_personas');
+    const cur = readPersona(ctx, args.persona);
     if (args.delete === true) {
       if (cur.builtin) throw new Error(`“${cur.name}” is built in and cannot be deleted – it can be changed, or restored in its editor`);
       const no = await approve(ctx, `Delete ${cur.character ? 'the character' : 'the persona'} “${cur.name}” and the memories it learned? Chats that used it switch to the default persona.`, 'Delete it');
@@ -223,12 +256,20 @@ export async function runCreatorTool(name, args, ctx) {
       return { ok: true, result: `Deleted “${cur.name}”.`, display: { path: cur.name } };
     }
     const plan = planPersonaEdit(cur, args);
+    const image = pickImage(args, ctx);
     const tsn = toolsNote(args);
-    const what = [...plan.changed, tsn].filter(Boolean).join(', ');
-    const no = await approve(ctx, `Change ${cur.character ? 'the character' : 'the persona'} “${cur.name}”: ${what}?`, 'Change it');
+    const what = [...plan.changed, image ? 'picture (the one you sent)' : '', tsn].filter(Boolean).join(', ');
+    // the new greetings are shown in full: they are what the chats will open with
+    const greet = plan.card ? [plan.card.first_mes !== cur.card?.first_mes ? plan.card.first_mes : ''] : [plan.persona.greeting !== (cur.greeting || '') ? plan.persona.greeting : ''];
+    const shown = greet.filter((g) => g && g.trim()).map((g) => `\n\nGreeting: ${g.slice(0, 400)}${g.length > 400 ? '…' : ''}`).join('');
+    const no = await approve(ctx, `Change ${cur.character ? 'the character' : 'the persona'} “${cur.name}”: ${what}?${shown}`, 'Change it');
     if (no) return declined(no);
-    await ctx.creator.edit(cur.id, { persona: plan.persona, card: plan.card, tools: typeof args.tools === 'boolean' ? args.tools : undefined, toolset: Array.isArray(args.toolset) ? args.toolset.filter((g) => GROUPS.includes(g)) : undefined, toolPicks: picksArg(args) });
-    return { ok: true, result: `Changed “${cur.name}”: ${what}. Everything else is as it was.`, display: { path: cur.name } };
+    await ctx.creator.edit(cur.id, { persona: plan.persona, card: plan.card, image, tools: typeof args.tools === 'boolean' ? args.tools : undefined, toolset: Array.isArray(args.toolset) ? args.toolset.filter((g) => GROUPS.includes(g)) : undefined, toolPicks: picksArg(args) });
+    // when it shows (decision 270): a greeting is how a NEW chat opens – a chat already going keeps its first message
+    const greetChanged = plan.changed.some((c) => /greeting|first_mes/.test(c));
+    const rest = plan.changed.some((c) => !/greeting|first_mes/.test(c)) || image || tsn;
+    const when = [greetChanged && 'the greetings are used by chats started from now on (a chat already going keeps the first message it opened with)', rest && 'the rest applies to every chat with it from its next reply'].filter(Boolean).join('; ');
+    return { ok: true, result: `Changed “${cur.name}”: ${what}. Everything else is as it was.${when ? ` When it shows: ${when}.` : ''}`, display: { path: cur.name } };
   }
   if (name === 'edit_lorebook') {
     const book = ctx.creator.findLorebook(String(args.lorebook || ''));

@@ -28,26 +28,47 @@ export const scriptPrompt = () =>
 
 /** The page the sandbox loads: a CSP that allows only this inline script; tools are proxied to the parent. */
 export function scriptDocument(token, code) {
+  // The script talks to the app only through a MessagePort the app hands over before the script starts (decision 273):
+  // a sandboxed frame can still load another page into itself (location = …), and that page – the same window to
+  // the app, origin "null" like this one – could otherwise keep calling tools with the token it was sent along. The new
+  // page never gets the port. Loading another page is also cancelled (Navigation API, where the WebView has it), and
+  // a page that goes anyway says so on its way out, so the run is stopped.
   const shim = `(() => {
   const T = ${JSON.stringify(token)};
   const pending = new Map();
   let seq = 0;
-  const out = (m) => parent.postMessage(Object.assign({ __script: T }, m), '*');
+  let send = null;
+  const out = (m) => send && send(Object.assign({ __script: T }, m));
+  try { if (typeof navigation !== 'undefined') navigation.addEventListener('navigate', (e) => { if (e.cancelable) e.preventDefault(); }); } catch (e) { /* no Navigation API: the pagehide below tells the app */ }
+  addEventListener('pagehide', () => out({ type: 'left' }));
   const fmt = (v) => (typeof v === 'string' ? v : (() => { try { return JSON.stringify(v, null, 1); } catch (e) { return String(v); } })());
   const print = (...a) => out({ type: 'print', text: a.map(fmt).join(' ') });
   const console = { log: print, info: print, warn: print, error: (...a) => print('[error]', ...a), debug: print };
-  addEventListener('message', (e) => {
-    const m = e.data;
-    if (!m || m.__host !== T || e.source !== parent) return;
-    const p = pending.get(m.id);
-    if (!p) return;
-    pending.delete(m.id);
-    p(m.res);
+  const gotPort = new Promise((resolve) => {
+    const take = (e) => {
+      const m = e.data;
+      if (e.source !== parent || !m || m.__host !== T || m.type !== 'port' || !e.ports || !e.ports[0]) return;
+      removeEventListener('message', take);
+      resolve(e.ports[0]);
+    };
+    addEventListener('message', take);
   });
+  parent.postMessage({ __script: T, type: 'hello' }, '*');
   const call = (name, args) => new Promise((resolve) => { const id = ++seq; pending.set(id, resolve); out({ type: 'call', id, name: String(name), args: args || {} }); });
   const tools = new Proxy({}, { get: (_, name) => (name === 'then' ? undefined : (args) => call(name, args)) });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  (async () => { /*CODE*/ })().then(
+  gotPort.then((port) => {
+    send = port.postMessage.bind(port);
+    port.onmessage = (e) => {
+      const m = e.data;
+      if (!m || m.__host !== T) return;
+      const p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id);
+      p(m.res);
+    };
+    return (async () => { /*CODE*/ })();
+  }).then(
     (v) => out({ type: 'done', value: v === undefined ? undefined : fmt(v) }),
     (err) => out({ type: 'error', error: String((err && err.stack) || err).slice(0, 1500) }),
   );
@@ -56,20 +77,54 @@ export function scriptDocument(token, code) {
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'"></head><body><script>${body.replace(/<\/script/gi, '<\\/script')}</script></body></html>`;
 }
 
+/**
+ * The app's side of a sandboxed frame's MessagePort (decision 273; mods use it too). The frame's first message, a
+ * "hello" from its own page (sent before any of its code runs), is answered with a port; from then on only the port
+ * counts – window messages are not listened to any more, so a page the frame navigated to can neither send nor
+ * receive anything. tag: the key carrying the token ('__script', '__mod'). A "left" message (the frame's page went
+ * away) goes to onLeft. → { post, close }
+ */
+export function frameChannel(frame, { tag, token, onMessage, onLeft, win = window }) {
+  let port = null;
+  let closed = false;
+  const hello = (e) => {
+    const m = e.data;
+    if (port || closed || !frame.contentWindow || e.source !== frame.contentWindow || !m || m[tag] !== token || m.type !== 'hello') return;
+    win.removeEventListener('message', hello);
+    const ch = new MessageChannel();
+    port = ch.port1;
+    port.onmessage = (ev) => {
+      const d = ev.data;
+      if (closed || !d || d[tag] !== token) return;
+      if (d.type === 'left') {
+        close();
+        onLeft?.();
+      } else onMessage(d);
+    };
+    frame.contentWindow.postMessage({ __host: token, type: 'port' }, '*', [ch.port2]);
+  };
+  const close = () => {
+    closed = true;
+    win.removeEventListener('message', hello);
+    port?.close();
+  };
+  win.addEventListener('message', hello);
+  return { post: (m) => !closed && port?.postMessage(m), close };
+}
+
 /** Runs the document in a hidden sandboxed iframe; → a handle the bridge talks to. (Browser only.) */
-function iframeRunner(doc, onMessage) {
+function iframeRunner(doc, onMessage, token) {
   const f = document.createElement('iframe');
   f.setAttribute('sandbox', 'allow-scripts');
   f.setAttribute('aria-hidden', 'true');
   f.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;pointer-events:none';
-  const listener = (e) => e.source === f.contentWindow && onMessage(e.data);
-  window.addEventListener('message', listener);
+  const ch = frameChannel(f, { tag: '__script', token, onMessage, onLeft: () => onMessage({ __script: token, type: 'left' }) });
   f.srcdoc = doc;
   document.body.append(f);
   return {
-    post: (m) => f.contentWindow?.postMessage(m, '*'),
+    post: ch.post,
     stop: () => {
-      window.removeEventListener('message', listener);
+      ch.close();
       f.remove();
     },
   };
@@ -113,6 +168,7 @@ export async function runScript(args, { callTool, signal, onStatus, runner = ifr
         size += m.text.length;
       } else if (m.type === 'done') finish(true, m.value !== undefined ? m.value : '');
       else if (m.type === 'error') finish(false, `[error] ${m.error}`);
+      else if (m.type === 'left') finish(false, '[stopped: the script loaded another page into its sandbox – a script runs only in its own page, so it was ended]');
       else if (m.type === 'call') {
         const name = String(m.name || '');
         let res;
@@ -136,7 +192,7 @@ export async function runScript(args, { callTool, signal, onStatus, runner = ifr
       }
     };
     try {
-      handle = runner(scriptDocument(token, code), onMessage);
+      handle = runner(scriptDocument(token, code), onMessage, token);
     } catch (e) {
       finish(false, `[could not start the sandbox: ${e?.message || e}]`);
     }

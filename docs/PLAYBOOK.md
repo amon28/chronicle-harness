@@ -25,7 +25,7 @@ descriptions say what each tool does; this says when to reach for which, and how
 - **Files**: `write_file` for new files, `edit_file` for a small change, `apply_patch` for several changes at once,
   `move_file` / `delete_file`. Read a file before you edit it. Large results spill to `.out/` – read the part you need.
 - **Compute**: `run_python` (Pyodide: numpy, pandas, matplotlib; sees /workspace) for data and quick scripts.
-  `shell` (real Alpine Linux, `apk add …`) for anything that needs real programs: git, node, compilers, ffmpeg, curl.
+  `shell` (real Debian Linux on ARM64, `apt-get install -y …`) for anything that needs real programs: git, node, compilers, ffmpeg, curl.
   A command that runs longer than 30 s comes back as a job – `shell_job` to wait, poll or kill. Never sit in a loop of sleeps.
 - **Web pages you build**: `preview_page` renders it, returns console errors and a screenshot. Look, fix, look again.
 - **Many independent pieces** (ten files to summarise, five sites to read): `delegate` them – several `tools:"read"`

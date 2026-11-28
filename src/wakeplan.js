@@ -10,7 +10,10 @@ export function wakePlan(convs, { proactiveOn = false, quiet = null, name = (c) 
   const out = [];
   for (const c of convs || []) {
     const title = String(name(c) || 'Chronicle').slice(0, 60);
-    for (const t of c.schedules || []) if (t.next) out.push({ at: t.next, convId: c.id, kind: 'task', title: `⏰ ${title}`, body: `Scheduled: ${String(t.prompt).slice(0, 140)}` });
+    // the body is what the notification says when the task could NOT run (Android had closed the app – the page
+    // answers for itself otherwise): said plainly, and a repeating one is set again by Android so the next one comes
+    // (decision 276: "⏰ Scheduled: …" read as done, and a repeat stopped after it)
+    for (const t of c.schedules || []) if (t.next) out.push({ at: t.next, convId: c.id, kind: 'task', title: `⏰ ${title}`, body: `Did not run – Android had closed Chronicle: ${String(t.prompt).slice(0, 120)}. Tap to run it now. (To run checks on their own, let Chronicle run in the background: Settings › Apps › Chronicle › Battery › Unrestricted.)`, ...(t.every ? { every: t.every } : {}) });
     if (c.resumeAt) out.push({ at: c.resumeAt, convId: c.id, kind: 'resume', title: `↻ ${title}`, body: 'Your OpenCode Go allowance has reset – open to retry the reply.' });
     if (proactiveOn) {
       const p = nextProactive(c, { quiet });

@@ -14,7 +14,7 @@ import { configureJobs, startJob, settle, jobSnapshot, getJob, listJobs, killJob
 import { ensureToolkit, toolkitSummary } from './toolkit.js';
 import { mountSpec, prepareShell, collectShell } from './bridge.js';
 import { syncSkillScripts } from './skills.js';
-import { NONINTERACTIVE_ENV, promptHint } from './shellhints.js';
+import { NONINTERACTIVE_ENV, killedHint, promptHint } from './shellhints.js';
 
 const native = Capacitor.isNativePlatform() ? registerPlugin('Shell') : null;
 /** Tests can install globalThis.__ocmShell = { status(), install({url,sha256}), exec({id,cmd,timeoutMs,mounts}), kill({id}), uninstall(), addListener() } */
@@ -348,13 +348,13 @@ export function finishedResult(r, { notes = [], prep = null, post = null, job = 
   const head = r.killed
     ? 'KILLED mid-way: the job that ran it was cancelled, so the command was stopped' + (r.exit != null ? ' (exit code ' + r.exit + ')' : '') + '; what it had written until then is kept in the files'
     : r.timedOut
-    ? 'TIMED OUT after ' + (r.limitS ? r.limitS + ' s' : 'the time limit') + ' – killed: the command and what it started were stopped' + (r.reaped ? ' (' + r.reaped + ' processes)' : '') + ', so it writes nothing more' + keptText(r.kept) + '; the next command starts a fresh shell (cd and variables are reset). What it had written until then is kept'
+    ? 'TIMED OUT after ' + (r.limitS ? r.limitS + ' s' : 'the time limit') + ' – killed: the command and what it started were stopped' + (r.reaped ? ' (' + r.reaped + ' processes)' : '') + ', so it writes nothing more' + keptText(r.kept) + '; the next command starts a fresh shell (cd and variables are reset). What it had written until then is kept. For work that needs longer than 10 minutes (a build, a big install, training), start it with the job script – job run \'<command>\' – which has no time limit, and follow it with job out <id>; after an interrupted apt-get run dpkg --configure -a first'
     : r.ended
       ? (endedWith ? 'exit code ' + r.exit + ' – ' : '') + 'the command ended the shell itself (exit or exec): the next command starts a fresh shell, so cd and variables are reset'
       : 'exit code ' + r.exit;
   const ok = !r.killed && !r.timedOut && r.exit === 0 && (!r.ended || endedWith);
   // a sync log that repeats a line is a sync log nobody reads
-  const extra = uniqNotes([prep?.note, post?.note, job ? 'job ' + job.id : '', ...notes, r.timedOut ? promptHint(out) : null]).join('\n');
+  const extra = uniqNotes([prep?.note, post?.note, job ? 'job ' + job.id : '', ...notes, r.timedOut ? promptHint(out) : null, !r.timedOut && !r.killed ? killedHint(out, r.exit) : null]).join('\n');
   return {
     ok,
     result: [head, out || (ok ? '(the command printed nothing – it succeeded)' : '(no output)'), cloneNote(r.cmd, out), extra].filter(Boolean).join('\n'),
@@ -369,19 +369,19 @@ export const shellDefs = () => [
     function: {
       name: 'shell',
       description:
-        `Run a command in a small Linux (${distro === 'alpine' ? 'Alpine, busybox sh' : 'Debian 13: commands run in sh (dash) – use bash -c for bash syntax; the usual GNU tools'}) that lives inside this app. Use it for things Python alone is awkward for: installing and running tools (${distro === 'alpine' ? 'apk add nodejs python3 git curl ffmpeg' : 'apt-get install -y nodejs python3 git ffmpeg'}), running scripts, git, curl, grep/sed/awk, building small projects. ` +
+        `Run a command in a small Linux (${distro === 'alpine' ? 'Alpine, busybox sh' : 'Debian 13: commands run in sh (dash) – use bash -c for bash syntax; the usual GNU tools'}) that lives inside this app. Use it for things Python alone is awkward for: installing and running tools (${distro === 'alpine' ? 'apk add nodejs python3 git curl ffmpeg' : 'apt-get install -y nodejs npm python3 git ffmpeg'}), running scripts, git, curl, grep/sed/awk, building small projects. ` +
         '/workspace is this chat workspace, mounted in (the same files as list_files and run_python: write a file there and it appears in both, delete it and it is gone from both), and /phone is the folder the user linked from their phone. No copying by hand – except a file over 32 MB (a video, an archive), which is not in /phone until phone_import puts it there (the command\'s notes list them); never look for phone files under /storage, /sdcard or /proc: the app cannot read them that way. ' +
         'The shell is persistent per chat (cd and environment variables carry over), and the helper scripts job, doctor and toolkit-pull are installed in PATH. ' +
         'A command that runs longer than 30 s comes back as a job with an id: keep working, then follow it with shell_job (action poll, wait or kill) - do not sleep in a loop. ' +
         'Internet access works. It is NOT the user phone: it cannot see their files beyond the linked folder. Set timeout_s for slow commands (default: no give-up until 10 minutes; max 600). ' +
         'Small files cross between /workspace and the app by themselves (up to 32 MB each, 128 MB per command, about 4-6 MB/s); for big media, deliver on the phone and tell the user, do not try to carry gigabytes through the chat. ' +
-        'node_modules and .git directories stay in the shell only (list_files/read_file do not see them), and /workspace is compared up to 20,000 files: clone repositories and install packages under /root, and put only the results in /workspace. ' +
+        'node_modules and .git directories stay in the shell only (list_files/read_file do not see them), and /workspace is compared up to 20,000 files: clone big repositories and install packages under /root, and put only the results in /workspace – but a project you will edit with edit_file / apply_patch (with diffs and undo) belongs in /workspace/<name>: those tools cannot reach /root, and its .git and node_modules stay in the shell anyway. ' +
         'A command that could destroy what cannot be brought back (rm -rf outside /workspace or of it, anything deleted or overwritten on /phone or /sdcard, git reset --hard, git push --force, git clean -f, dd, mkfs) waits for the user to allow it, even in Auto, and is refused where nobody can be asked.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'The shell command(s) to run' },
-          timeout_s: { type: 'integer', description: 'Time limit in seconds (max 600): at the limit the command and what it started are killed and the shell restarts. Commands over 30 s return a job handle first. To keep something running, start it with & (it is left alone) and follow it with shell_job.' },
+          timeout_s: { type: 'integer', description: 'Time limit in seconds (max 600): at the limit the command and what it started are killed and the shell restarts. Commands over 30 s return a job handle first. To keep something running on purpose, start it with the job script (job run \'cmd\') and follow it with job out <id> / job wait <id> inside the shell – shell_job only knows the jobs the shell tool handed back. A plain & leaves it running with no handle at all.' },
           restart: { type: 'boolean', description: 'Start a fresh shell first (clears cd/variables, kills anything running)' },
         },
         required: ['command'],
@@ -397,7 +397,7 @@ export const shellJobDefs = () => [
     function: {
       name: 'shell_job',
       description:
-        'Follow up a command that the shell tool returned as a job (or one started with the job script). poll reads what the command has printed so far and whether it is still running; wait blocks until it ends (or wait_s passes); kill stops it; list shows the jobs of this chat. The exit code and any files it wrote are there when it finishes.',
+        'Follow up a command that the shell tool returned as a job (job_… ids). One started inside the shell with the job script (job run) is followed there: job out <id>, job wait <id>, job kill <id>. poll reads what the command has printed so far and whether it is still running; wait blocks until it ends (or wait_s passes); kill stops it; list shows the jobs of this chat. The exit code and any files it wrote are there when it finishes.',
       parameters: {
         type: 'object',
         properties: {
@@ -415,8 +415,12 @@ export const shellJobDefs = () => [
 let storage = false; // all files access allowed: the phone's storage is at /sdcard
 export const setShellStorage = (on) => (storage = !!on);
 export const shellPrompt = () =>
-  '- shell runs commands in a small Linux inside the app (' + pkgHint() + ' to install nodejs, python3, git, ffmpeg, ...). /workspace there is this chat workspace and /phone is the linked phone folder - read and write them directly instead of copying through the app. A phone file over 32 MB (a video) is not in /phone until phone_import brings it there (it then says /phone/<path>); do not hunt for it under /storage. Keep /workspace small (clone and npm install under /root): it is mirrored file by file into the app, and node_modules/.git stay in the shell only.' +
+  '- shell runs commands in a small Linux inside the app (' + pkgHint() + ' to install nodejs, python3, git, ffmpeg, ...). /workspace there is this chat workspace and /phone is the linked phone folder - read and write them directly instead of copying through the app. A phone file over 32 MB (a video) is not in /phone until phone_import brings it there (it then says /phone/<path>); do not hunt for it under /storage. Keep /workspace small (big clones and installs under /root): it is mirrored file by file into the app, and node_modules/.git stay in the shell only. The file tools (read_file, edit_file…) see /workspace only – a project you edit with them goes in /workspace/<name>.' +
   (storage ? ' The phone\'s whole storage (Download, DCIM, Documents…) is at /sdcard: the user allowed it – change or delete files there only when asked.' : '') +
+  // what this Linux is and is not (decision 276): every field review found a model losing turns to one of these
+  (distro === 'alpine'
+    ? ''
+    : " It is Debian on ARM64 under proot (not a VM, no root kernel access): x86_64 binaries (many SDK and toolchain zips) do not run – prefer Debian's own packages; npm is a separate package from nodejs (apt-get install -y nodejs npm); pip refuses system installs – use apt-get install -y python3-<name> or python3 -m venv /root/venv. No USB, serial or Bluetooth devices, and no raw sockets: ping, arp, ip route and nmap -sS do not work – use curl, nmap -sT -Pn. Anything that may take more than 10 minutes (a build, a toolchain install, a dev server you keep running) starts with job run '<command>' (no time limit; job out <id> to follow) – a plain command is killed at its timeout. The user's local network is reachable from here (the app's local-network grant does not limit the shell), so treat devices there with care.") +
   ' Run doctor once on a fresh machine (it prints tools, network and writable folders) before installing anything. A command over 30 s comes back with a job id: poll it with shell_job (or job out <id> inside the shell) instead of sleeping, and check the exit code and the output before claiming success. Do not paste secrets into commands.';
 
 /** One exec's worth of setup: toolkit verified, /workspace and /phone in sync. Returns notes for the result. */
@@ -603,7 +607,10 @@ export async function runShellJobTool(args, ctx = {}) {
   const found = getJob(args.job_id);
   const job = found && mine(found) ? found : null;
   if (!job) {
-    return { ok: false, result: 'No job ' + (args.job_id || '?') + '. shell_job {"action":"list"} shows the jobs of this chat.', display: { error: 'unknown job' }, meta: { surface: 'linux-shell' } };
+    // an id from the job script (job run) is not one of these – say where it is followed instead of only "no job" (decision 269)
+    const id = String(args.job_id || '?');
+    const script = id !== '?' && !/^job_/.test(id) ? ' If ' + id + ' came from the job script (job run) inside the shell, follow it there: shell {"command":"job out ' + id.replace(/[^\w.-]/g, '') + '"} (or job wait / job kill).' : '';
+    return { ok: false, result: 'No job ' + id + ' among the shell tool\'s jobs.' + script + ' shell_job {"action":"list"} shows the jobs of this chat.', display: { error: 'unknown job' }, meta: { surface: 'linux-shell' } };
   }
   if (action === 'kill') {
     const snap = await killJob(job);

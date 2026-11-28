@@ -229,7 +229,10 @@ const STUB_MIN = 240; // a result shorter than this is left alone: the stub woul
 const ARGS_MAX = 600; // a failed call's arguments longer than this are clipped once 3 turns have passed
 const FAILED_TURNS = 3;
 const NEVER_STUB = new Set(['ask_user', 'propose_plan', 'view_images', 'take_photo', 'delegate', 'todo_write', 'goal']);
-export const STUB_REPEAT = '[Result left out: the same call (same tool, same arguments) was made again later – its newer result is further down.]';
+// a call that changes or reads changing state (a shell, a job poll, a page) can answer differently the next time: an
+// older result of it says what was true then, so it is never left out for a newer one (decision 269)
+const STATEFUL = new Set(['shell', 'shell_job', 'pc_shell', 'pc_job', 'run_python', 'run_script', 'browser', 'preview_page', 'phone_status', 'claude_code', 'ask_model', 'ask_model_status', 'fetch_url', 'web_search']);
+export const STUB_REPEAT = '[Result left out: the same call (same tool, same arguments) was made again later – its newer result, further down, is the current one.]';
 export const stubRead = (path) => `[Result left out: ${path} was changed later in this chat, so this read is out of date – read it again if you need the current text.]`;
 
 /** Messages before this index may be pruned (and only what they say decides it): a step function of the count. */
@@ -289,9 +292,10 @@ export function clipArgs(raw) {
   try {
     a = JSON.parse(raw || '{}');
   } catch {
-    return JSON.stringify({ clipped: `${String(raw).slice(0, 200)}… [${String(raw).length} chars of arguments of a failed call left out]` });
+    return JSON.stringify({ clipped: `${String(raw).slice(0, 200)}… [shortened here to save room: the call sent ${String(raw).length} characters of arguments in all]` });
   }
-  const walk = (v) => (typeof v === 'string' ? (v.length > 300 ? `${v.slice(0, 200)}… [${v.length - 200} chars left out – this call failed]` : v) : Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v);
+  // the marker says it is a shortening of what was sent, not part of it and not why the call failed (decision 269)
+  const walk = (v) => (typeof v === 'string' ? (v.length > 300 ? `${v.slice(0, 200)}… [shortened here to save room: ${v.length - 200} more characters were sent in this call]` : v) : Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v);
   return JSON.stringify(walk(a));
 }
 
@@ -309,7 +313,9 @@ export function deadWeight(messages, { from = 0, cut = pruneCut(messages.length)
   // 1. the same call again: only the newest keeps its result
   const newest = new Map();
   for (const x of calls) newest.set(sigOf(x.c), x);
-  for (const x of calls) if (!NEVER_STUB.has(x.c.name) && newest.get(sigOf(x.c)) !== x && long(x.c)) results.set(x.key, STUB_REPEAT);
+  // …never for a call whose older answer still says something: a git status before and after a commit was stubbed
+  // as "its newer result is further down", and the older state was lost
+  for (const x of calls) if (!NEVER_STUB.has(x.c.name) && !STATEFUL.has(x.c.name) && newest.get(sigOf(x.c)) !== x && long(x.c)) results.set(x.key, STUB_REPEAT);
   // 2. a file read, then changed later: the read is out of date
   const changedLater = new Set();
   for (let i = calls.length - 1; i >= 0; i--) {

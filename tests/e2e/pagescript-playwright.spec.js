@@ -16,11 +16,13 @@ const HTML = `<!doctype html><title>Shop</title><h1>Top</h1><h2 id=h2>Second</h2
 <div id=ed contenteditable=true>abc</div>
 <a id=lnk href="#went">Go</a>
 <button id=last onclick="this.dataset.n=(+this.dataset.n||0)+1">Save changes</button>
-<iframe src="https://ads.other.test/frame" style="width:300px;height:100px" title="Ad"></iframe>`;
+<iframe src="https://ads.other.test/frame" style="width:300px;height:100px" title="Ad"></iframe>
+<iframe src="http://192.168.1.1/admin" style="width:100px;height:50px" title="Router"></iframe>`;
 
 test.beforeEach(async ({ page }) => {
   await page.route('https://site.test/**', (r) => (r.request().url().endsWith('/api') ? r.fulfill({ body: JSON.stringify({ auth: r.request().headers()['x-test'] || null }), contentType: 'application/json' }) : r.fulfill({ body: HTML, contentType: 'text/html' })));
   await page.route('https://ads.other.test/**', (r) => r.fulfill({ body: '<p>ad</p>', contentType: 'text/html' }));
+  await page.route('http://192.168.1.1/**', (r) => r.abort());
   await page.goto(SITE);
   await page.evaluate(PAGE_SCRIPT);
 });
@@ -77,6 +79,10 @@ test('a script-made key does what the key would: Tab, Backspace, arrows, a dropd
 test('a frame from another site is listed with where it is; dispatch_event; a real key is counted', async ({ page }) => {
   const s = JSON.parse(await page.evaluate(() => window.__ocmB.snapshot()));
   expect(s.elements.find((l) => l.startsWith('[frame]'))).toMatch(/^\[frame\] from ads\.other\.test "Ad" at x \d+–\d+, y \d+–\d+ – another site/);
+  // a frame from the user's own network was never loaded (decision 268): not offered as a box to click into
+  const lan = s.elements.find((l) => l.includes('192.168.1.1'));
+  expect(lan).toMatch(/^\[frame\] to 192\.168\.1\.1 – NOT LOADED: the app blocks local-network addresses/);
+  expect(lan).not.toMatch(/mouse kind click/);
   expect(await page.evaluate(() => window.__ocmB.dispatch({ selector: '#last' }, 'click', {}))).toMatch(/sent click to button#last/);
   expect(await page.locator('#last').getAttribute('data-n')).toBe('1');
   await page.evaluate(() => document.querySelector('#last').addEventListener('hello', (e) => (document.title = 'got ' + e.detail.x)));

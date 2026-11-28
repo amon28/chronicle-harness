@@ -144,7 +144,22 @@ function searchable(files, dir, pattern) {
 }
 const skippedNote = (n) => (n ? `\n(${n} file${n === 1 ? '' : 's'} in .out/, node_modules, .git, dist… not searched – give that folder as path to search it)` : '');
 
+/**
+ * An absolute path outside /workspace (/root/app/x.js, /tmp/a) is the shell's own disk, not the chat's files (decision
+ * 276): cleanPath dropped the slash, so write_file /root/app/x.js wrote /workspace/root/app/x.js and said "Wrote
+ * root/app/x.js". Refused with where to go instead. /workspace/… and relative paths are as before.
+ */
+export function outsideWorkspace(...paths) {
+  for (const raw of paths) {
+    const t = String(raw ?? '').trim();
+    if (!t.startsWith('/') || /^\/workspace(\/|$)/.test(t) || t === '/') continue;
+    if (/^\/phone(\/|$)/.test(t)) throw new Error(`${t} is the linked phone folder – use the phone_* tools (phone_read, phone_write) or the shell for it; these tools work on the chat's files in /workspace.`);
+    throw new Error(`${t} is outside /workspace – it is on the Linux shell's own disk, which these tools cannot reach. Use the shell for it (cat, sed -n, grep -n, or a heredoc to write), or keep the project in /workspace/<name> (a clone's .git and node_modules stay in the shell only, so that is cheap) and use these tools there.`);
+  }
+}
+
 export async function runCodeTool(name, args, ctx, w) {
+  outsideWorkspace(args?.path, args?.from, args?.to);
   if (name === 'edit_file') {
     const p = cleanPath(args.path);
     if (!p) throw new Error('path is required');
@@ -273,6 +288,7 @@ export async function runCodeTool(name, args, ctx, w) {
 
 /** write_file, guarded and checked. */
 export async function writeFileTool(args, ctx, w) {
+  outsideWorkspace(args.path);
   const p = cleanPath(args.path);
   if (!p) throw new Error('path is required');
   const content = String(args.content ?? '');
@@ -301,6 +317,7 @@ export async function writeFileTool(args, ctx, w) {
 
 /** read_file: by characters (offset/max_chars) or by lines (start_line/end_line, numbered). */
 export function readFileTool(args, w, notText) {
+  outsideWorkspace(args.path);
   const p = cleanPath(args.path);
   const f = w.files[p];
   if (!f) throw new Error(`File not found: ${p}. Use list_files or glob_files to see what exists.`);

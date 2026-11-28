@@ -16,7 +16,7 @@ printf 'path     '; echo "$PATH"
 
 # busybox applets have no --version, and answer with "unrecognized option" on stderr: try the
 # documented flags in turn, then say "present" - never print the error text as if it were a version
-for t in python3 ffmpeg curl openssl git node npm tar sha256sum wget jq; do
+for t in python3 ffmpeg curl openssl git node npm tar sha256sum wget jq java adb gcc; do
   printf '%-10s ' "$t"
   if command -v "$t" >/dev/null 2>&1; then
     v=$("$t" --version 2>/dev/null | head -1 | cut -c1-46)
@@ -30,10 +30,28 @@ done
 
 for h in $D_HOSTS; do
   printf 'net %-22s ' "$h"
-  if command -v wget >/dev/null 2>&1; then
-    wget -q -O /dev/null --timeout=8 "https://$h" 2>/dev/null && echo ok || echo BLOCKED
-  elif command -v curl >/dev/null 2>&1; then
-    curl -fsS -m 8 -o /dev/null "https://$h" 2>/dev/null && echo ok || echo BLOCKED
+  # a site that answers with an error page is reached all the same: only no answer at all is a network problem, and
+  # which one is said (name lookup, connection, TLS, timeout) rather than one BLOCKED for all of them
+  if command -v curl >/dev/null 2>&1; then
+    c=$(curl -sS -m 8 -o /dev/null -w '%{http_code}' "https://$h" 2>/dev/null); e=$?
+    case "$e" in
+      0) echo "ok (HTTP $c)" ;;
+      6) echo "FAILED: name not found (DNS)" ;;
+      7) echo "FAILED: could not connect" ;;
+      28) echo "FAILED: timed out after 8 s" ;;
+      52|56) echo "FAILED: the connection broke off (or a proxy refused it)" ;;
+      35|51|58|60) echo "FAILED: TLS / certificate error (curl $e)" ;;
+      *) echo "FAILED (curl exit $e)" ;;
+    esac
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O /dev/null --timeout=8 --tries=1 "https://$h" 2>/dev/null; e=$?
+    case "$e" in
+      0) echo ok ;;
+      8) echo "ok (reached; the server answered with an error)" ;;
+      4) echo "FAILED: network (name lookup, connection or timeout)" ;;
+      5) echo "FAILED: TLS / certificate error" ;;
+      *) echo "FAILED (wget exit $e)" ;;
+    esac
   else
     echo "no wget/curl"
   fi

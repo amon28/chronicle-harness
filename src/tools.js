@@ -5,6 +5,8 @@ import { readUrl, formatRead, enforceOperators } from './webread.js';
 import { takeScreenshot, VIEWS } from './screenshot.js';
 import { canFetchAnySite } from './api.js';
 import { callTool as mcpCall } from './mcp.js';
+import { lanDefs, lanHostOf, runLanTool } from './lan.js';
+import { PERMISSION_TOOLS } from './permissions.js';
 import { sandbox, wsPut, wsList, wsDelete, cleanPath, shotName, conflictText } from './sandbox.js';
 import { P } from './prompts.js';
 import { phoneDefs, phonePrompt, runPhoneTool } from './phonetools.js';
@@ -175,11 +177,13 @@ export function toolDefs(enabled, extra = []) {
   t.push(...doctorDefs());
   t.push(...reloadToolsDef());
   if (enabled.web && enabled.delegate) t.push(...deepResearchDefs());
+  // asking for addresses on the user's own network (decision 271): for the chat's own model only
+  if ((enabled.web || enabled.browser) && !enabled.helper && !enabled.noLan) t.push(...lanDefs());
   if (enabled.delegate) t.push(...delegateDefs(enabled.agents || [], enabled.models || [], enabled.helperName || ''));
   if (enabled.claudecode) t.push(...claudeCodeDefs(enabled.claudecode)); // the user's Claude Code in Linux (decision 167)
   if (enabled.autonomy)
     t.push(
-      fn('search_chats', "Search the user's earlier chats (titles and messages) for something discussed before – a decision, a file, code, a fact. Returns chat ids with a snippet.", { query: { type: 'string', description: 'Words to look for' }, max_results: { type: 'integer' } }, ['query']),
+      fn('search_chats', "Search the user's earlier chats (titles and messages) for something discussed before – a decision, a file, code, a fact. Words match where a word starts. Returns chat ids with a snippet and the date of the best match. Roleplay chats are not searched.", { query: { type: 'string', description: 'Words to look for' }, since: { type: 'string', description: 'Only messages from this date on (2026-11-01, or 7d / 3w / 2m for days, weeks, months back)' }, before: { type: 'string', description: 'Only messages before this date' }, max_results: { type: 'integer' } }, ['query']),
       fn('read_chat', 'Read an earlier chat found with search_chats (its summary and messages; page with from). id "this": the older part of THIS chat that was compacted, as it was, tool calls and results included.', { id: { type: 'string', description: 'A chat id, or "this"' }, from: { type: 'integer', description: 'Message number to start at' }, max_chars: { type: 'integer', description: 'Default 12000' } }, ['id']),
     );
   if (enabled.autonomy) t.push(...scriptDefs());
@@ -264,6 +268,17 @@ export const guidanceFor = (enabled, names) =>
     .map((x) => x.text)
     .join('\n');
 
+const opts0Headers = (a) => (a.headers && typeof a.headers === 'object' ? a.headers : {});
+/** A date for search_chats: 2026-11-01, or 7d / 3w / 2m back from now. → ms, 0 when none, NaN when unreadable. */
+export function chatDate(v, now = Date.now()) {
+  const t = String(v ?? '').trim();
+  if (!t) return 0;
+  const rel = /^(\d+)\s*([dwmy])$/i.exec(t);
+  if (rel) return now - Number(rel[1]) * { d: 864e5, w: 6048e5, m: 2592e6, y: 31536e6 }[rel[2].toLowerCase()];
+  const d = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(t) ? t + 'T00:00:00' : t);
+  return Number.isNaN(d) ? NaN : d;
+}
+
 export function toolsSystemPrompt(enabled, fileCount, phoneFolder, phoneMode, lastReview) {
   const later = deferredSections(enabled);
   const now = (key) => !enabled.lazy || !later.some((x) => x.key === key); // a held-back tool's guidance comes with load_tools
@@ -310,8 +325,27 @@ export function toolsSystemPrompt(enabled, fileCount, phoneFolder, phoneMode, la
   if (enabled.skills) lines.push(skillsPrompt(enabled.skills));
   if (enabled.skills?.some((k) => k.name === 'chronicle-harness')) lines.push('- This app is a phone, not a desktop: when a tool behaves in a way you did not expect (a click without activation, a missing part in a screenshot, a cut list, a copy that went nowhere), load use_skill chronicle-harness before working around it.');
   // what is switched off, so the model says "turn X on" instead of working around it badly
-  const offNow = [!enabled.web && 'web search', !enabled.python && 'Python', !enabled.shell && 'the Linux shell', !enabled.browser && 'browser control', !enabled.delegate && 'helper agents', !enabled.creator && 'creating personas'].filter(Boolean);
-  if (offNow.length && !enabled.helper) lines.push(`- Switched off right now: ${offNow.join(', ')}. If the task really needs one, tell the user to turn it on (Settings › Tools & agent, or 🛠 in this chat) rather than working around it.`);
+  // every group, with where it is turned on (decision 270: only six were named, all under one path – the phone ones,
+  // the PC and private data were never said to be off, so the model claimed it had no such ability at all)
+  const T = 'Tools & agent';
+  const offNow = [
+    [!enabled.web, 'web search', `${T} › Tools`],
+    [!enabled.python, 'Python', `${T} › Tools`],
+    [!enabled.shell, 'the Linux shell', `${T} › Agent behaviour`],
+    [!enabled.browser, 'browser control', `${T} › Agent behaviour`],
+    [!enabled.preview, 'page previews', `${T} › Agent behaviour`],
+    [!enabled.delegate, 'helper agents (delegate)', `${T} › Agent behaviour`],
+    [!enabled.creator, 'creating personas', `${T} › Agent behaviour`],
+    [!enabled.phone, 'the linked phone folder', `${T} › Phone`],
+    [!enabled.intents, 'opening other apps, alarms, timers, text and email drafts', `${T} › Phone › Other apps`],
+    [!enabled.device, 'calendar, contacts, location and places', `${T} › Phone › Phone data`],
+    [!enabled.phonectl, 'battery, network, Wi-Fi, flashlight, volume, clipboard', `${T} › Phone › Phone status & controls`],
+    [!enabled.private, 'texts, call log, notifications and place triggers', `${T} › Phone › Sensitive phone access`],
+    [!enabled.pc, 'files on the user\'s PC', 'Connections › Files on my PC'],
+  ]
+    .filter((x) => x[0])
+    .map((x) => `${x[1]} (Settings › ${x[2]})`);
+  if (offNow.length && !enabled.helper) lines.push(`- Switched off right now: ${offNow.join('; ')}. A chat can also switch groups with 🛠, and a persona's tool set can leave some out. If the task really needs one, tell the user where to turn it on rather than working around it or saying you cannot do it at all.`);
   if (enabled.picked?.length) lines.push(`- This persona also has these single tools from groups that are otherwise off: ${enabled.picked.join(', ')} – use them when they fit.`);
   if ((enabled.skills || []).some((k) => k.name === 'chronicle-playbook')) lines.push('- For a task with more than a few steps, or when unsure how to approach something here, read the chronicle-playbook skill first: it says which tool fits which job.');
   if (fileCount) lines.push('- The workspace already has files in it – list_files shows them.'); // no count: a number that changes with every write would spoil the prompt cache
@@ -754,6 +788,8 @@ async function runToolInner(call, ctx) {
         const when = ops.results.length || extra ? `(Searched ${new Date().toISOString().slice(0, 10)}. Snippets are the search engines' cached copies and can be out of date – for versions, prices, releases or news, prefer the newest dated source and fetch_url the page to confirm.)` : '';
         return { ok: true, result: clip([body, extra, ops.note, when].filter(Boolean).join('\n\n') || 'No results.'), display: { query: q, results: ops.results.map(({ title, url }) => ({ title, url })), engines: out.answered } };
       }
+      case 'local_network':
+        return await runLanTool(args, ctx);
       case 'fetch_url': {
         const asked = (Array.isArray(args.urls) ? args.urls : [args.urls || args.url]).filter(Boolean).map(String);
         const urls = asked.slice(0, 5);
@@ -762,18 +798,24 @@ async function runToolInner(call, ctx) {
         const max = Math.max(500, Math.min(20000, Number(args.max_chars) || 6000));
         const mode = searchMode(ctx.settings);
         const exaRead = (list) => exaCall(ctx.settings, 'web_fetch_exa', { urls: list, maxCharacters: max }, ctx.signal);
-        if (mode === 'exa') return { ok: true, result: clip((await exaRead(urls)) || 'No content.'), display: { urls } };
+        // the addresses on the user's own network this chat may reach now (decision 271): read on the phone only – never
+        // handed to Exa or the page renderer, which could not reach them and should not be told them
+        const lanAllow = (await ctx.lanIps?.().catch(() => [])) || [];
+        const onLan = (u) => lanAllow.includes(lanHostOf(u));
+        if (mode === 'exa' && !urls.some(onLan) && !Object.keys(opts0Headers(args)).length) return { ok: true, result: clip((await exaRead(urls)) || 'No content.'), display: { urls } };
         // read on the phone (rendering JavaScript pages when needed); what still fails falls back to Exa (unless engines-only)
         const offset = Math.max(0, Number(args.offset) || 0);
         const opts = { format: ['text', 'html', 'raw', 'links'].includes(args.format) ? args.format : 'text', render: ['auto', 'js', 'static'].includes(args.render) ? args.render : 'auto', maxChars: max, timeoutMs: Math.max(3000, Math.min(45000, Number(args.timeout_ms) || 15000)), headers: args.headers && typeof args.headers === 'object' ? Object.fromEntries(Object.entries(args.headers).map(([k, v]) => [String(k), String(v)])) : {} };
         // read max characters from offset on: the page is asked for offset + max + 1, so "there is more" is known
-        const pages = (await Promise.all(urls.map((u) => readUrl(u, { ...opts, maxChars: offset + max + 1 })))).map((p) => {
+        const pages = (await Promise.all(urls.map((u) => readUrl(u, { ...opts, maxChars: offset + max + 1, unattended: !ctx.lan, ...(onLan(u) ? { lanAllow } : {}) })))).map((p) => {
           if (typeof p.text !== 'string') return p;
           const more = p.text.length > offset + max;
           const part = p.text.slice(offset, offset + max);
           return { ...p, text: part + (more ? `\n… [cut here: characters ${offset}–${offset + max} – call fetch_url again with offset ${offset + max} for the next part]` : offset && !part ? '(nothing more at this offset)' : '') };
         });
-        const retry = pages.filter((p) => !p.ok && p.reason !== 'local' && p.reason !== 'pdf' && p.reason !== 'not_found' && opts.format === 'text').map((p) => p.url);
+        // a read made with the caller's own headers (a token, a cookie) is never retried anonymously elsewhere (decision 273)
+        const ownHeaders = Object.keys(opts.headers || {}).length > 0;
+        const retry = pages.filter((p) => !p.ok && p.reason !== 'local' && p.reason !== 'pdf' && p.reason !== 'not_found' && opts.format === 'text' && !onLan(p.url) && !ownHeaders).map((p) => p.url);
         let exaText = '';
         if (retry.length && mode !== 'engines') {
           ctx.onStatus?.('Reading with Exa…');
@@ -1019,7 +1061,7 @@ async function runToolInner(call, ctx) {
           const r = await runModAuthorTool(call.name, args, ctx);
           if (r) return r;
         }
-        if (call.name === 'roleplay_presets' || call.name === 'list_personas' || call.name === 'read_persona' || call.name === 'edit_persona' || call.name === 'edit_lorebook' || call.name === 'save_character' || call.name === 'save_lorebook' || call.name === 'save_persona') return await runCreatorTool(call.name, args, ctx);
+        if (call.name === 'roleplay_presets' || call.name === 'list_personas' || call.name === 'read_persona' || call.name === 'edit_persona' || call.name === 'edit_lorebook' || call.name === 'save_character' || call.name === 'save_lorebook' || call.name === 'save_persona') return await runCreatorTool(call.name, args, ctx, { shrinkImage });
         if (call.name === 'deep_research')
           return await runDeepResearch({ ...args }, { ...ctx, saveReport: w ? (path, text) => wsPut(w, path, text, { by: 'deep_research' }) : null }, async (name, a) => {
             // its searches and page reads follow your permissions like any other call
@@ -1068,11 +1110,16 @@ async function runToolInner(call, ctx) {
           await ctx.chats.ready?.(); // every chat's messages read first (decision 260)
           if (call.name === 'search_chats') {
             const max = Math.max(1, Math.min(20, Number(args.max_results) || 8));
-            let hits = searchChats(ctx.chats.list(), args.query, { exclude: ctx.convId, max });
-            // with smart memory: also the chats that talk about it in other words
-            if (ctx.chats.semantic) hits = mergeHits(hits, await ctx.chats.semantic(args.query, { exclude: ctx.convId, max }).catch(() => []), max);
+            const since = chatDate(args.since);
+            const before = chatDate(args.before);
+            if (Number.isNaN(since) || Number.isNaN(before)) throw new Error(`Could not read the date ${JSON.stringify(Number.isNaN(since) ? args.since : args.before)} – use 2026-11-01, or 7d / 3w / 2m.`);
+            let hits = searchChats(ctx.chats.list(), args.query, { exclude: ctx.convId, max, since, before });
+            // with smart memory: also the chats that talk about it in other words (not limited by date: said so)
+            if (ctx.chats.semantic && !since && !before) hits = mergeHits(hits, await ctx.chats.semantic(args.query, { exclude: ctx.convId, max }).catch(() => []), max);
             const when = (t) => (t ? new Date(t).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }) : '');
-            return { ok: true, result: hits.length ? hits.map((h) => `${h.id} · "${h.title}" · ${when(h.at)}${h.how === 'meaning' ? ' · (about it, in other words)' : ''}\n  ${h.snippet}`).join('\n') + '\n\nRead one with read_chat.' : `No earlier chat mentions ${JSON.stringify(args.query)}.`, display: { path: String(args.query || ''), count: hits.length } };
+            const span = [since && `from ${when(since)}`, before && `before ${when(before)}`].filter(Boolean).join(' ');
+            const rp = ' (roleplay chats are not searched)';
+            return { ok: true, result: hits.length ? hits.map((h) => `${h.id} · "${h.title}" · ${when(h.at)}${h.how === 'meaning' ? ' · (about it, in other words)' : ''}\n  ${h.snippet}`).join('\n') + `\n\nRead one with read_chat.${span ? ` Only messages ${span}.` : ''}` : `No earlier chat mentions ${JSON.stringify(args.query)}${span ? ` in messages ${span}` : ''}${rp}.`, display: { path: String(args.query || ''), count: hits.length } };
           }
           if (!args.id) throw new Error('read_chat needs "id": a chat id from search_chats, or "this" for the part of this chat that was compacted.');
           const self = String(args.id || '') === 'this';
@@ -1155,7 +1202,18 @@ async function runToolInner(call, ctx) {
           const r = await mcpCall(route.server, route.tool, args);
           // its pictures go to a model that can see them (like view_images); for one that cannot, the text says so
           const pics = ctx.vision && r.images?.length ? r.images : [];
-          const text = r.images?.length && !pics.length ? r.text.replace(/\[picture (\d+) – shown to you after this result\]/g, '[picture $1 – this model cannot see pictures]') : r.text;
+          let text = r.text;
+          if (r.images?.length && !pics.length) {
+            // a model that cannot see: a vision model describes them, as for a screenshot (decision 270) – before, it was
+            // only told there were pictures it could not see
+            let said = '';
+            if (ctx.describeImages) {
+              ctx.onStatus?.('a vision model is describing the pictures…');
+              const d = await ctx.describeImages(r.images, `These pictures came back from the tool ${route.tool} (${route.server.name}). Describe each one in detail: what it shows, any text in it word for word, numbers, layout.`, ctx.signal).catch(() => null);
+              if (d?.text) said = `\n\n[The pictures, described by ${d.model || 'a vision model'} – this model cannot see them]\n${d.text}`;
+            }
+            text = r.text.replace(/\[picture (\d+) – shown to you after this result\]/g, said ? '[picture $1 – described below]' : '[picture $1 – this model cannot see pictures]') + said;
+          }
           return { ok: !r.isError, result: clip(text), display: { server: route.server.name }, ...(pics.length ? { images: pics } : {}) };
         }
         return { ok: false, result: `Unknown tool: ${call.name}`, display: { error: 'unknown tool' } };
@@ -1167,10 +1225,23 @@ async function runToolInner(call, ctx) {
   }
 }
 
+/** A tool as the user reads it: "Shell job", "pics: snap" for an MCP tool – not its raw name (decision 270). */
+export function toolLabel(name, route = null) {
+  // what it does (the Permissions list: "✏️ Write files"), else its chip ("💻 Shell job"); a saved tool by its own name
+  const p = PERMISSION_TOOLS.find((x) => x[0] === name);
+  if (p) return p[1];
+  const l = TOOL_LABELS[name];
+  if (l) return `${l[0]} ${l[1]}`;
+  if (route?.server) return `${route.server.name}: ${route.tool}`;
+  if (/^tool_/.test(name)) return `the saved tool “${name.slice(5).replace(/_/g, ' ')}”`;
+  return String(name || '').replace(/^mcp_/, '').replace(/_/g, ' ');
+}
+
 export const TOOL_LABELS = {
   save_tool: ['🧰', 'Saved a tool'],
   web_search: ['🔍', 'Searched'],
   fetch_url: ['🌐', 'Read'],
+  local_network: ['🏠', 'Local network'],
   run_python: ['🐍', 'Ran Python'],
   list_files: ['📁', 'Listed files'],
   read_file: ['📄', 'Read file'],
@@ -1241,6 +1312,7 @@ export const TOOL_LABELS = {
   pc_read: ['🖥', 'Read from the PC'],
   pc_import: ['📥', 'Copied from the PC'],
   pc_write: ['📤', 'Saved to the PC'],
+  pc_edit: ['📝', 'Edited on the PC'],
   pc_shell: ['🖥', 'Ran on the PC'],
   pc_job: ['🖥', 'PC job'],
   shell: ['💻', 'Shell'],

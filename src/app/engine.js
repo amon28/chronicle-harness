@@ -14,7 +14,7 @@ import { fileToPrompt } from '../files.js';
 import { ensureVectors, loadEmbedder, similarities } from '../embed.js';
 import { newMemory, setSim, setBulletSim, textKey, bulletsOf, episodesFor, selectStory, storyUnits, learnBatch, memoryBlock, dropReferenceLeaks, extractMemories, applyMemoryChanges, worthLearning, pickLearnModel, learnCandidates, visibleMemories, extractEpisode, applyEpisode, isEvent, snapshotMemories, diffMemories, revertMemoryLog, applyMemoryLog } from '../memory.js';
 import { mentionedMembers, groupBlock, pickSpeakers, mergeSameRole } from '../group.js';
-import { guidanceFor, toolDefs, toolsSystemPrompt, runTool, skillDefs } from '../tools.js';
+import { guidanceFor, toolDefs, toolLabel, toolsSystemPrompt, runTool, skillDefs } from '../tools.js';
 import { askableModels, ccEnabled, ccSpillHint, checkArgs, crossTools, listModelsText, mcpToolList } from '../cctools.js';
 import { ORIGIN_MODEL } from '../cctask.js';
 import { agentReplyText } from '../acp.js';
@@ -34,7 +34,7 @@ import { stylePrompt } from '../outputstyles.js';
 import { rememberText, addToAgentsMd } from '../remember.js';
 import { cleanTracker, fieldList, parseTracker, trackerToVars } from '../tracker.js';
 import { canUseShell, killShell, releaseShell, runShell, runShellTool, setShellStorage, usedShells } from '../shell.js';
-import { getJob, jobSnapshot as shellJobSnapshot, settle as settleJob, isRunning as jobRunning, killJob, jobOnShell } from '../jobs.js';
+import { anyJobRunning, getJob, jobSnapshot as shellJobSnapshot, settle as settleJob, isRunning as jobRunning, killJob, jobOnShell } from '../jobs.js';
 import { changeList, agentsInstructions, asksFirst } from '../planmode.js';
 import { activePreset, presetEffort, presetModel, presetPref, presetSamplers } from '../rppresets.js';
 import { lineDiff, collapseDiff, wordDiff } from '../diff.js';
@@ -72,6 +72,8 @@ import { attaching, hideSlash, openModels, renderAttachments, updateSlash } from
 import { applyToolPicks } from '../toolset.js';
 import { $, cardFor, chatPersona, enabledToolsAll, convIsRp, copyText, currentModel, effortOptions, el, enabledTools, fmtUsage, groupMembers, hooks, isGroup, lorebookById, memoryOn, personaById, personas, pref, state, supportsImages, toast, toolsOn, uid, userName, userPersona } from './core.js';
 import { updateFilesChip, wsMem } from './extras.js';
+import { findModel } from '../delegate.js';
+import { lanUsable, netKey } from '../lan.js';
 import { renderStoryBox } from './personas-ui.js';
 import { repaintMessage, modelName, appendMessage, contextNow, messageNode, messagesEl, msgNode, renderMessages, rerenderLast, scrollBottom, setStick, toolSubject, updateContextChip } from './render.js';
 import { openSettings } from './settings.js';
@@ -315,6 +317,9 @@ function apiMessages(conv = state.current, { agent = false, wsCount = 0, persona
   // output style (per chat, else the default): built in, or from the project's .chronicle/styles/
   const style = stylePrompt(conv.outputStyle || pref('outputStyle'), projectStyles(wsMem.get(conv.id)?.files, wsText));
   if (style && !rp) parts.push(style);
+  // what the chat draws (decision 276): models fell back to ASCII art or a Python chart for a diagram nobody told
+  // them would render
+  if (!rp && !group && !isGuest) parts.push(RENDER_NOTE);
   if (conv.summary?.text) parts.push(`## Earlier in this conversation (summary)\nThe older messages of this chat were summarized to save space:\n\n${conv.summary.text}${conv.summary.todoNote ? `\n\n${conv.summary.todoNote}` : ''}`);
   const out = [{ role: 'system', content: parts.filter((x) => x && x.trim()).join('\n\n') }];
 
@@ -605,6 +610,20 @@ function saveRunning() {
 const saveWhenIdle = () => (typeof requestIdleCallback === 'function' ? requestIdleCallback(saveRunning, { timeout: 2000 }) : saveRunning());
 // going to the background is when Android kills apps: what is being written is saved at once
 document.addEventListener('visibilitychange', () => document.hidden && state.runs.size && saveRunning());
+const RENDER_NOTE = 'This chat renders Markdown: ```mermaid code blocks are drawn as diagrams (flowchart, sequence, class, state, ER, gantt), $…$ and $$…$$ as math (KaTeX; in a table cell write \\mid instead of |), and tables, task lists and code with syntax colours.';
+let jobHoldTimer = null;
+/** The service stops once no chat writes and no shell job runs (checked again every 15 s while a job does). */
+function holdForJobs() {
+  clearTimeout(jobHoldTimer);
+  if (state.runs.size || !keepAliveOn || ccHold) return;
+  if (anyJobRunning()) {
+    jobHoldTimer = setTimeout(holdForJobs, 15000);
+    return;
+  }
+  keepAliveOn = false;
+  bgWarned = false;
+  KeepAlive.stop().catch(() => {});
+}
 function syncRuns() {
   const here = state.runs.has(state.current?.id);
   document.body.classList.toggle('streaming', here);
@@ -641,11 +660,10 @@ function syncRuns() {
     clearTimeout(streamEndTimer);
     streamEndTimer = setTimeout(() => {
       if (state.runs.size) return;
-      if (keepAliveOn && !ccHold) {
-        keepAliveOn = false;
-        bgWarned = false;
-        KeepAlive.stop().catch(() => {});
-      }
+      // a shell job still running (a training run, a build) keeps the app alive after the reply ends (decision 276):
+      // the service was stopped 1.2 s after the reply, and Android could freeze the app – and the Linux under it –
+      // mid-job. Looked at again every 15 s until the jobs are done.
+      if (keepAliveOn && !ccHold) holdForJobs();
       if (document.hidden) notifyReplyDone();
     }, 1200);
   }
@@ -1065,15 +1083,59 @@ function helperChat(model, sessionId, { messages, tools, signal, onText }) {
  * mode "none": one answer, no tools. "read"/"full": its own short tool loop (see subagent.js) with the chat's
  * tools minus the ones a helper must not have; it shares the chat's workspace and shell.
  */
+/** ctx.lan / ctx.lanIps for a chat (decision 271): its grant, the network the phone is on now, and the addresses usable now. */
+function lanCtx(conv) {
+  const now = async () => {
+    const P = globalThis.__ocmLanNet ? { lanNet: globalThis.__ocmLanNet } : Phone;
+    if (!P?.lanNet) return null;
+    return netKey(await P.lanNet());
+  };
+  return {
+    lan: {
+      grant: () => conv.lanGrant || null,
+      now,
+      set: (g) => {
+        conv.lanGrant = g;
+        persist(conv);
+        hooks.grantsChanged?.(conv);
+      },
+    },
+    lanIps: async () => (conv.lanGrant ? lanUsable(conv.lanGrant, await now().catch(() => null)).ips : []),
+  };
+}
+
+/**
+ * A model asked for by name that only the user's Claude Code has (decision 269): delegate cannot run it, the claude_code
+ * tool can – said, with that model's value, instead of only "no such model".
+ */
+function ccHint(asked, conv) {
+  let info = null;
+  try {
+    info = hooks.ccTaskInfo?.(conv);
+  } catch {
+    /* not set up */
+  }
+  if (!info || !enabledTools(conv)?.claudecode) return '';
+  const m = findModel(info.models.map((x) => ({ id: x.value, name: x.name })), String(asked).replace(/^cc:/, '').replace(/\s*\(?claude code\)?\s*/i, ' ').trim());
+  if (m.id) return ` "${asked}" is a model of the user's Claude Code: give the task to the claude_code tool instead, with model "${m.id}".`;
+  if (/claude|opus|sonnet|haiku|fable|^cc:/i.test(asked)) return ` If it is one of the user's Claude Code models, give the task to the claude_code tool instead (its model choices: ${info.models.map((x) => `${x.name} → ${x.value}`).join('; ') || 'see its description'}).`;
+  return '';
+}
+
 async function delegateTo(prompt, signal, conv, opts = {}) {
   const cand = learnCandidates(state.models, pref('helperModel'), currentModel());
-  const own = opts.model && state.models.find((x) => x.id === opts.model || x.name === opts.model)?.id; // a project agent may name its model
-  // an id that is not on the list is refused, not quietly swapped for the default: the caller would never know
+  // the model asked for, by its id, its name, or words that fit it alone (decision 267: "Claude Opus 5.5" or
+  // "claude-opus-5-5" for "anthropic:claude-opus-5-5" was refused with a list holding that very model)
+  const found = opts.model ? findModel(state.models, opts.model) : {};
+  const own = found.id;
+  const named = (x) => `${x.name && x.name !== x.id ? `${x.name} → ` : ''}${x.id}`;
+  if (opts.model && found.candidates) throw new Error(`"${opts.model}" fits several models – name one: ${found.candidates.slice(0, 20).map(named).join('; ')}`);
+  // one that is not on the list is refused, not quietly swapped for the default: the caller would never know
   if (opts.model && !own) {
-    // the ids that look like what was asked for first (a part of it), else the start of the list
+    // the ones that look like what was asked for first (a word of it), else the start of the list
     const words = String(opts.model).toLowerCase().split(/[\s:/_.-]+/).filter((w) => w.length > 1);
     const near = state.models.filter((x) => words.some((w) => `${x.id} ${x.name || ''}`.toLowerCase().includes(w)));
-    throw new Error(`There is no model "${opts.model}". Leave model out for the helper model, or use one of: ${(near.length ? near : state.models).slice(0, 40).map((x) => x.id).join(', ')}`);
+    throw new Error(`There is no model "${opts.model}" among the user's models.${ccHint(opts.model, conv)} Leave model out for the helper model, or use one of: ${(near.length ? near : state.models).slice(0, 40).map(named).join('; ')}`);
   }
   const mode = helperMode(opts.mode);
   // Claude Code as the helper (decision 169) answers the one-shot jobs; a helper with tools runs on a normal model
@@ -1099,7 +1161,7 @@ async function delegateTo(prompt, signal, conv, opts = {}) {
   // killOnAbort: a stopped helper's shell command is killed, not left running (decision 183; its Python stops anyway)
   // a run_script of the helper's (code mode) calls only the helper's own tools, and never asks the user: it is a helper
   const gate = async (n, a, via, sig) => (!allowed.has(n) || n === 'run_script' ? { msg: `${n} is not one of your tools, so your script cannot call it either.`, short: 'not available' } : opts.toolCtx.gate ? opts.toolCtx.gate(n, a, 'a helper agent', sig) : null);
-  const ctx = { ...opts.toolCtx, gate, vision: false, ask: undefined, delegate: undefined, claudeCode: undefined, signal, onStatus: () => {}, shellCwd: '/workspace', killOnAbort: true, shellKey: opts.shellKey || '', phone: opts.toolCtx.phone && { ...opts.toolCtx.phone, mode: () => 'readonly' } };
+  const ctx = { ...opts.toolCtx, gate, vision: false, ask: undefined, delegate: undefined, claudeCode: undefined, lan: undefined, lanIps: undefined, signal, onStatus: () => {}, shellCwd: '/workspace', killOnAbort: true, shellKey: opts.shellKey || '', phone: opts.toolCtx.phone && { ...opts.toolCtx.phone, mode: () => 'readonly' } };
   const gated = async (call) => {
     if (!allowed.has(call.name)) return { ok: false, result: `${call.name} is not one of your tools.`, display: { error: 'not available' } };
     const b = opts.toolCtx.gate ? await opts.toolCtx.gate(call.name, call.arguments, 'a helper agent') : null;
@@ -1123,6 +1185,9 @@ async function delegateTo(prompt, signal, conv, opts = {}) {
  * Settings › Tools & agent › Permissions (never / ask me), the chat's 🛡 Ask-first mode for changes (or ⚡ Bypass, which
  * skips the questions but never a Never), and your pre-tool hooks. → null when it may run, else { msg, short }. `via` names who is calling, in the question you are asked.
  */
+/** What an approval shows, cut with a mark that says how much is not shown (decision 276: it was cut silently at 300–400). */
+const clipShown = (t, n) => (t.length > n ? `${t.slice(0, n)}… [${t.length - n} more characters not shown]` : t);
+
 async function gateToolCall(conv, name, args, { signal, subject, onWait, via = '', hookList = () => [], runHookCmd = null, canAsk = true } = {}) {
   const command = name === 'shell' ? shellCommandOf(args) : '';
   // a shell command that could destroy what cannot be brought back waits for your OK, in every mode (Settings › Tools & agent);
@@ -1144,7 +1209,7 @@ async function gateToolCall(conv, name, args, { signal, subject, onWait, via = '
     if (!canAsk) return { msg: `Not run: ${danger.reason}, and nobody is here to say yes (${via || 'a run on its own'}). Such commands need the user's OK. Do it another way that keeps their files safe, or leave it and tell the user what you would run and why.`, short: 'needs your OK' };
     onWait?.('waiting for your OK…');
     const ans = await hooks
-      .askUser({ questions: [{ question: `Run this shell command${via ? ` (${via})` : ''}? ${danger.reason[0].toUpperCase() + danger.reason.slice(1)}.\n\n$ ${command.slice(0, 400)}`, options: ['Run it', 'Not now'] }], convId: conv.id, convTitle: conv.title || 'a chat', signal })
+      .askUser({ questions: [{ question: `Run this shell command${via ? ` (${via})` : ''}? ${danger.reason[0].toUpperCase() + danger.reason.slice(1)}.${danger.command && danger.command !== command ? `\n\nThe part that does it:\n$ ${String(danger.command).slice(0, 300)}` : ''}\n\n$ ${clipShown(command, 1200)}`, options: ['Run it', 'Not now'] }], convId: conv.id, convTitle: conv.title || 'a chat', signal })
       .then((a) => String(a?.[0] || 'Not now'))
       .catch(() => 'Not now');
     if (ans !== 'Run it') {
@@ -1153,6 +1218,7 @@ async function gateToolCall(conv, name, args, { signal, subject, onWait, via = '
     }
   }
   if (decision === 'ask') {
+    if (!canAsk) return { msg: `Not run: ${toolLabel(name)} is set to ask first (Settings › Tools & agent › Permissions), and nobody is here to answer (${via || 'a run on its own'}). Leave it for when the user is here, and say what you would have done.`, short: 'needs your OK' };
     onWait?.('waiting for your OK…');
     const what = (() => {
       try {
@@ -1162,10 +1228,13 @@ async function gateToolCall(conv, name, args, { signal, subject, onWait, via = '
       }
     })();
     const ans = await hooks
-      .askUser({ questions: [{ question: `Allow ${name}${via ? ` (${via})` : ''}${what ? `: ${String(what).slice(0, 300)}` : ''}?`, options: ['Allow once', 'Allow for this chat', 'Deny'] }], convId: conv.id, convTitle: conv.title || 'a chat', signal })
+      .askUser({ questions: [{ question: `Allow ${toolLabel(name)}${via ? ` (${via})` : ''}${what ? `: ${clipShown(String(what), 800)}` : ''}?`, options: ['Allow once', 'Allow for this chat', 'Deny'] }], convId: conv.id, convTitle: conv.title || 'a chat', signal })
       .then((a) => String(a?.[0] || 'Deny'))
       .catch(() => 'Deny');
-    if (ans === 'Allow for this chat') conv.allowedTools = [...(conv.allowedTools || []), name];
+    if (ans === 'Allow for this chat') {
+      conv.allowedTools = [...(conv.allowedTools || []), name];
+      hooks.grantsChanged?.(conv);
+    }
     else if (ans !== 'Allow once') {
       const why = ans !== 'Deny' && !/^\(no preference/.test(ans) ? ` They said: "${ans.slice(0, 500)}"` : '';
       return { msg: `The user did not allow this ${name} call.${why} Do not try the same call again; follow what they said, or ask them.`, short: 'you said no' };
@@ -1207,7 +1276,10 @@ async function askModelFor(conv, args, ctx, signal, { sync = null } = {}) {
   if (!task) return { ok: false, result: 'task is required.' };
   const want = String(args?.model || '').trim();
   const list = askableModels(state.models);
-  const found = want ? list.find((m) => m.id === want) || list.find((m) => String(m.name || '').toLowerCase() === want.toLowerCase()) : null;
+  // by its id, its name or words that fit it alone, as delegate takes it (decision 267)
+  const hit = want ? findModel(list, want) : {};
+  if (hit.candidates) return { ok: false, result: `"${want}" fits several models – name one: ${hit.candidates.slice(0, 20).map((x) => `${x.name && x.name !== x.id ? `${x.name} → ` : ''}${x.id}`).join('; ')}` };
+  const found = hit.id ? list.find((m) => m.id === hit.id) : null;
   if (want && !found) return { ok: false, result: `There is no model "${want}" in Chronicle${/^cc:|claude code/i.test(want) ? " that ask_model may use (Claude Code's own models are not offered here)" : ''}. Call list_models for the ids, or leave model out for the user's helper model.` };
   const mode = helperMode(args?.tools);
   const maxSteps = Math.max(1, Math.min(20, Number(args?.max_steps) || 8));
@@ -1388,7 +1460,7 @@ async function modelJobTool(conv, name, args) {
  * pre/post-tool hooks (they need the chat's shell). → { ok, result, images? }
  */
 /** Chronicle tools that never read or write the chat's own files: no workspace sync around them (decision 256). */
-const NO_FILE_TOOLS = new Set(['roleplay_presets', 'calendar', 'contacts', 'location', 'places', 'phone_status', 'phone_control', 'notifications', 'messages', 'memory', 'search_chats', 'read_chat', 'web_search', 'list_personas', 'read_persona', 'save_persona', 'edit_persona', 'save_lorebook', 'edit_lorebook', 'read_lorebook', 'shortcuts', 'phone_folder', 'phone_list', 'pc_list', 'pc_search', 'list_models', 'ask_model_status', 'ask_model_cancel']);
+const NO_FILE_TOOLS = new Set(['local_network', 'roleplay_presets', 'calendar', 'contacts', 'location', 'places', 'phone_status', 'phone_control', 'notifications', 'messages', 'memory', 'search_chats', 'read_chat', 'web_search', 'list_personas', 'read_persona', 'save_persona', 'edit_persona', 'save_lorebook', 'edit_lorebook', 'read_lorebook', 'shortcuts', 'phone_folder', 'phone_list', 'pc_list', 'pc_search', 'list_models', 'ask_model_status', 'ask_model_cancel']);
 hooks.ccRunTool = async (conv, name, args, { signal, origin = '' } = {}) => {
   const tools = hooks.ccTools(conv, { origin });
   if (!tools.some((t) => t.name === name)) {
@@ -2204,6 +2276,9 @@ async function runCompletion(personaArg = null, { first = true, alts = null, gue
           device: Device,
           phoneCtl: Phone,
           ...hooks.privateCtx?.(conv, { quiet, proactive }), // notifications, texts & calls (src/app/private-ui.js)
+          // the chat's local-network grant (decision 271) – not for a scheduled or proactive run (nobody is there to see
+          // what it reaches), and never handed to a helper (delegateTo leaves it out)
+          ...(quiet || proactive || [...conv.messages].reverse().find((m) => m.role === 'user')?.scheduled ? {} : lanCtx(conv)),
           phone: {
             folder: () => conv.phoneFolder,
             link: async () => {
@@ -2221,6 +2296,8 @@ async function runCompletion(personaArg = null, { first = true, alts = null, gue
             log: phoneLog,
           },
           todos: { set: (items) => { conv.todos = items; if (state.current === conv) hooks.todosChanged?.(); } },
+          // the calendar / contacts / location OKs of this chat, kept with it (decision 270)
+          deviceOks: { has: (w) => !!conv.deviceOks?.includes(w), add: (w) => { if (conv.deviceOks?.includes(w)) return; conv.deviceOks = [...(conv.deviceOks || []), w]; persist(conv); hooks.grantsChanged?.(conv); } },
           goal: { get: () => conv.goal || null, set: (g) => { conv.goal = g; persist(conv); if (state.current === conv) hooks.goalChanged?.(); } },
           schedules: schedulesFor(conv),
           chats: { ready: () => hooks.loadAllMessages?.(), list: () => (state.convs || []).filter((c) => !convIsRp(c)), semantic: pref('smartMemory') ? async (q, o) => (await hooks.semanticChats(q, o.max, o.exclude)).filter((h) => !convIsRp(state.convs.find((c) => c.id === h.id) || {})) : null },
@@ -2240,7 +2317,9 @@ async function runCompletion(personaArg = null, { first = true, alts = null, gue
             const text = transcriptOf(conv.messages.slice(Math.max(conv.summary?.upto || 0, conv.messages.length - 30)), { agent: true });
             return head + (text.length > 40000 ? '…' + text.slice(-40000) : text);
           },
-          ask: (q, opts, signal) => hooks.askUser({ questions: Array.isArray(q) ? q : [{ question: q, options: opts }], convId: conv.id, convTitle: conv.title || 'a chat', signal }).then((a) => (Array.isArray(q) ? a : a[0])),
+          // a scheduled or quiet run has nobody to answer (decision 276): a question there waited forever, and the
+          // chat's later checks were skipped while it was open – tools get no ask and say they need the user's OK
+          ask: canAsk ? (q, opts, signal) => hooks.askUser({ questions: Array.isArray(q) ? q : [{ question: q, options: opts }], convId: conv.id, convTitle: conv.title || 'a chat', signal }).then((a) => (Array.isArray(q) ? a : a[0])) : undefined,
           modSearch: (q, o) => modHost.runSearchSources(q, o),
           creator: hooks.creator,
           presets: hooks.presetTool,
@@ -3180,9 +3259,12 @@ async function sendNow(mine) {
     const ws = await getWorkspace(state.current.id);
     for (const f of files) {
       if (f.zip && f.entries) f.entries.forEach((e) => wsPut(ws, `${f.folder}/${e.path}`, e.data));
-      else if (f.bytes) f.inWorkspace = wsPut(ws, uniquePath(ws, f.name), f.bytes);
+      else if (f.bytes) {
+        f.inWorkspace = wsPut(ws, uniquePath(ws, f.name), f.bytes);
+        if (f.textCopy && f.text) f.textPath = wsPut(ws, uniquePath(ws, f.name + '.txt'), new TextEncoder().encode(f.text));
+      }
     }
-    msg.files = files.map(({ kind, bytes, entries, ...f }) => f);
+    msg.files = files.map(({ kind, bytes, entries, textCopy, ...f }) => f);
     updateFilesChip();
   }
   let branched = false;
@@ -4102,7 +4184,7 @@ async function forkChat(src = state.current, upto = null) {
   delete copy.episodes;
   // what the original was told to do later, and what you allowed there, stay with the original: a copied schedule
   // would run every task twice (once in each chat), and "Allow for this chat" was said for that chat
-  for (const k of ['schedules', 'schedDone', 'allowedTools', 'resumeAt', 'silenceUntil']) delete copy[k];
+  for (const k of ['schedules', 'schedDone', 'allowedTools', 'deviceOks', 'lanGrant', 'resumeAt', 'silenceUntil']) delete copy[k];
   if (isBypass(copy)) delete copy.permMode; // ⚡ Bypass was confirmed for that chat, like "Allow for this chat"
   // Claude Code / a PC agent: the fork starts its own session (with the chat so far); the original keeps its own
   if (copy.acp) for (const k of ['sessionId', 'promptSig', 'seen']) delete copy.acp[k];

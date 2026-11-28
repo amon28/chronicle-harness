@@ -117,6 +117,7 @@
           <button id="goal-btn" class="meta-chip goal-chip" hidden></button>
           <button id="todo-btn" class="meta-chip" hidden></button>
           <button id="sched-btn" class="meta-chip" hidden></button>
+          <button id="grants-btn" class="meta-chip grants-chip" hidden></button>
           <span id="mod-chips" class="mod-chips"></span>
           <button id="effort-btn" class="meta-chip" hidden></button>
           <button id="ctx-btn" class="meta-chip ctx-chip" hidden></button>
@@ -2038,6 +2039,19 @@
         </div>
         <ul id="todo-items" class="todo-list big"></ul>
         <button id="todo-clear" class="ghost-btn small">Clear the list</button>
+      </div>
+    </div>
+
+    <!-- What this chat was allowed (decision 271): the local network, phone data, tools – each can be taken back -->
+    <div id="grants-sheet" class="sheet" aria-hidden="true">
+      <div class="sheet-card">
+        <div class="sheet-head">
+          <h2>🔓 Allowed in this chat</h2>
+          <button class="icon-btn small" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <ul id="grants-items" class="grants-list"></ul>
+        <p class="hint">Only this chat has these. Helpers and scheduled runs never get local-network access. The Linux shell is not limited by the local-network list: it reaches the network on its own.</p>
+        <button id="grants-clear" class="ghost-btn small">Take all back</button>
       </div>
     </div>
 

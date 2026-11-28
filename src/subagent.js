@@ -52,6 +52,7 @@ const NEVER = new Set([
   'phone_write',
   'phone_delete',
   'pc_write',
+  'pc_edit',
   'pc_shell',
   'pc_job',
   'goal',

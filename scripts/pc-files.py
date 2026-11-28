@@ -22,25 +22,36 @@ out unless you start it with --dotfiles.
 C:/Users/you/x, hidden ones included, reading and saving) and running commands. Chronicle asks you on the phone before
 each command unless that chat is in Auto or Bypass mode. Only use it with a phone and a network you trust.
 
-  GET  /health                         {app, version, write, full, os, folders: [{name}]}
-  POST /list   {path, recursive}       {entries: [{path, dir, size, mtime}], cut}
+  GET  /health                         {app, version, write, full, dotfiles, os, folders: [{name}]}
+  POST /list   {path, recursive, depth, max, skip: [folder names]}   {entries: [{path, dir, size, mtime}], cut, left_out}
   POST /stat   {path}                  {exists, dir, size, mtime}
   POST /read   {path, offset, length}  {data: base64, size, eof}
-  POST /search {path, name, text, max} {matches: [{path, line, text} | {path}], cut}
-  POST /write  {path, data: base64, append, mkdirs}   {size}   (with --write or --full)
+  POST /search {path, name, text, regex, count_only, all, max}
+               {matches: [{path, line, text} | {path} | {path, count}], cut, skipped: [{path, why}], skipped_count, binary,
+                left_out: [folders], searched, stopped}   node_modules, .git, dist, build… are left out unless all
+  POST /write  {path, data: base64, append, mkdirs, backup}   {size, backup, link_to}   (with --write or --full)
+               keeps the file's mode and owner; the replaced version stays as <file>.bak unless backup is false
   POST /exec   {command, cwd, timeout, wait}  {job, running, exit, stdout, stderr, timed_out}   (only with --full)
                a command still running after `wait` (default 20 s) goes on as a job; timeout (default 600 s) ends it
   POST /job    {job, wait, kill}       the same, for a job: wait up to 25 s more, read its output, or kill it
+  POST /jobs   {}                      the jobs kept now: [{job, command, cwd, running, exit, seconds, timeout}]
+               /exec takes the job id from the phone (j + hex): sent twice – an answer lost on the way – it runs once
   POST /preview {command, cwd}         what a kill or delete would hit: {processes: [...], files: [...]}
 """
-import base64, fnmatch, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
+import base64, fnmatch, json, os, platform, re, secrets, shutil, socket, stat, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = 3
+VERSION = 5
 MAX_READ = 8 * 1024 * 1024
 MAX_WRITE = 32 * 1024 * 1024
 MAX_LIST = 2000
-MAX_SEARCH_FILE = 4 * 1024 * 1024
+# search: a file is read line by line up to this size (it was skipped without a word above 4 MB), the walk has its own
+# caps instead of the 2000-entry list cap (a repo with node_modules found nothing in its src), and folders a build or
+# an install makes are left out unless asked for (decision 274)
+MAX_SEARCH_FILE = 200 * 1024 * 1024
+MAX_SEARCH_ENTRIES = 300000
+SEARCH_SECONDS = 60
+SKIP_DIRS = ("node_modules", ".git", "dist", "build", ".next", "target", "venv", ".venv", "__pycache__")
 MAX_OUT = 200 * 1024
 IS_WIN = os.name == "nt"
 
@@ -583,8 +594,9 @@ def entry(rel, real):
     return {"path": rel, "dir": os.path.isdir(real), "size": 0 if os.path.isdir(real) else st.st_size, "mtime": int(st.st_mtime * 1000)}
 
 
-def walk(real, rel, recursive, depth=0, cap=MAX_LIST):
-    """depth: how many levels below this folder (0 = no limit when recursive); cap: at most this many entries."""
+def walk(real, rel, recursive, depth=0, cap=MAX_LIST, skip=(), left_out=None):
+    """depth: how many levels below this folder (0 = no limit when recursive); cap: at most this many entries.
+    skip: folder names not gone into (each one is listed, and its path added to left_out)."""
     out, cut = [], False
     stack = [(real, rel, 1)]
     absolute = is_abs(rel)
@@ -609,12 +621,61 @@ def walk(real, rel, recursive, depth=0, cap=MAX_LIST):
                 e = entry(fr, fpath)
             except OSError:
                 continue
+            if e["dir"] and n in skip:
+                if left_out is not None:
+                    left_out.append(fr)
+                continue
             if len(out) >= cap:
                 return out, True
             out.append(e)
             if recursive and e["dir"] and not os.path.islink(fpath) and (not depth or level < depth):
                 stack.append((fpath, fr, level + 1))
     return out, cut
+
+
+def search_walk(real, rel, skip, deadline, state):
+    """Every file below a folder, depth first, for search: no list cap, but at most MAX_SEARCH_ENTRIES entries and
+    until the deadline (state["stopped"] says which ended it). Folders named in skip are left out (state["left_out"]).
+    Yields (phone path, real path, size)."""
+    absolute = is_abs(rel)
+    stack = [(real, rel)]
+    while stack:
+        d, r = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                items = sorted(it, key=lambda x: x.name.lower())
+        except OSError:
+            state["skipped"].append({"path": r, "why": "could not be opened"})
+            continue
+        subdirs = []
+        for de in items:
+            n = de.name
+            if not dotfiles and n.startswith("."):
+                continue
+            state["entries"] += 1
+            if state["entries"] > MAX_SEARCH_ENTRIES:
+                state["stopped"] = f"more than {MAX_SEARCH_ENTRIES} files and folders"
+                return
+            if time.time() > deadline:
+                state["stopped"] = f"{SEARCH_SECONDS} s"
+                return
+            fr = f"{r.rstrip('/')}/{n}"
+            try:
+                if not absolute:
+                    root = roots[fr.split("/")[0]]
+                    rp = os.path.realpath(de.path)
+                    if rp != root and not rp.startswith(root + os.sep):
+                        continue
+                if de.is_dir():
+                    if n in skip:
+                        state["left_out"].append(fr)
+                    elif not de.is_symlink():
+                        subdirs.append((de.path, fr))
+                    continue
+                yield fr, de.path, de.stat().st_size
+            except OSError:
+                continue
+        stack.extend(reversed(subdirs))
 
 
 def rel_of(path, parts):
@@ -630,8 +691,11 @@ def do_list(b):
         return {"entries": [entry(rel_of(path, parts), real)], "cut": False}
     depth = max(0, int(b.get("depth") or 0))
     cap = max(1, min(20000, int(b.get("max") or MAX_LIST)))
-    entries, cut = walk(real, rel_of(path, parts), bool(b.get("recursive")) or depth > 1, depth, cap)
-    return {"entries": entries, "cut": cut}
+    # skip: folder names not gone into – pc_import of a repo root stopped at node_modules' 2000 entries (decision 274)
+    skip = tuple(str(x) for x in (b.get("skip") or []) if x)
+    left_out = []
+    entries, cut = walk(real, rel_of(path, parts), bool(b.get("recursive")) or depth > 1, depth, cap, skip, left_out)
+    return {"entries": entries, "cut": cut, "left_out": left_out[:200]}
 
 
 def do_stat(b):
@@ -672,34 +736,85 @@ def do_search(b):
     else:
         real, _, parts = resolve(path)
         starts = [(real, rel_of(path, parts))]
-    matches, cut, needle = [], False, text.lower()
+    count_only = bool(b.get("count_only"))
+    if text and b.get("regex"):
+        try:
+            rx = re.compile(text, re.IGNORECASE)
+        except re.error as e:
+            raise Refused(400, f"text is not a valid regular expression ({e}) – or leave regex out to find it as it is")
+        hit = lambda raw: rx.search(raw.decode("utf-8", "replace")) is not None
+    elif text.isascii():
+        needle = text.lower().encode()
+        hit = lambda raw: needle in raw.lower()  # bytes: no decoding of lines that cannot match
+    else:
+        needle_s = text.lower()
+        hit = lambda raw: needle_s in raw.decode("utf-8", "replace").lower()
+    skip = () if b.get("all") else SKIP_DIRS
+    st = {"entries": 0, "stopped": None, "left_out": [], "skipped": [], "skipped_count": 0}
+    deadline = time.time() + SEARCH_SECONDS
+    matches, searched, binary = [], 0, 0
+
+    def skipped(p, why):
+        st["skipped_count"] += 1
+        if len(st["skipped"]) < 50:
+            st["skipped"].append({"path": p, "why": why})
+
+    def answer(cut):
+        return {"matches": matches, "cut": cut, "skipped": st["skipped"], "skipped_count": st["skipped_count"], "left_out": st["left_out"][:50], "left_out_count": len(st["left_out"]), "searched": searched, "binary": binary, "stopped": st["stopped"]}
+
     for real, rel in starts:
-        files = [entry(rel, real)] if not os.path.isdir(real) else walk(real, rel, True)[0]
-        for e in files:
-            if e["dir"]:
-                continue
-            base = e["path"].rsplit("/", 1)[-1]
+        files = [(rel, real, os.path.getsize(real))] if not os.path.isdir(real) else search_walk(real, rel, skip, deadline, st)
+        for fr, fpath, size in files:
+            base = fr.rsplit("/", 1)[-1]
             if name and not fnmatch.fnmatch(base.lower(), name.lower()):
                 continue
             if not text:
-                matches.append({"path": e["path"]})
-            elif e["size"] <= MAX_SEARCH_FILE:
-                try:
-                    fr = resolve(e["path"])[0]
-                    with open(fr, "rb") as f:
-                        raw = f.read()
-                    if b"\0" in raw[:4096]:
+                matches.append({"path": fr})
+                if len(matches) >= limit:
+                    return answer(True)
+                continue
+            if size > MAX_SEARCH_FILE:
+                skipped(fr, f"{size // 1048576} MB – over the {MAX_SEARCH_FILE // 1048576} MB a search reads")
+                continue
+            if time.time() > deadline:
+                st["stopped"] = f"{SEARCH_SECONDS} s"
+                break
+            # line by line (a big log is read, not skipped), never more than a MB of one line at a time
+            try:
+                with open(fpath, "rb") as f:
+                    if b"\0" in f.read(4096):
+                        binary += 1
                         continue
-                    for i, line in enumerate(raw.decode("utf-8", "replace").splitlines(), 1):
-                        if needle in line.lower():
-                            matches.append({"path": e["path"], "line": i, "text": line.strip()[:300]})
-                            if len(matches) >= limit:
+                    f.seek(0)
+                    searched += 1
+                    line_no, n = 1, 0
+                    while True:
+                        raw = f.readline(1 << 20)
+                        if not raw:
+                            break
+                        if hit(raw):
+                            n += 1
+                            if not count_only and not (matches and matches[-1].get("line") == line_no and matches[-1]["path"] == fr):
+                                matches.append({"path": fr, "line": line_no, "text": raw.decode("utf-8", "replace").strip()[:300]})
+                                if len(matches) >= limit:
+                                    return answer(True)
+                        if raw.endswith(b"\n"):
+                            line_no += 1
+                            if line_no % 5000 == 0 and time.time() > deadline:
+                                skipped(fr, f"the time ran out at line {line_no}")
+                                st["stopped"] = f"{SEARCH_SECONDS} s"
                                 break
-                except (OSError, Refused):
-                    continue
-            if len(matches) >= limit:
-                return {"matches": matches, "cut": True}
-    return {"matches": matches, "cut": cut}
+                    if count_only and n:
+                        matches.append({"path": fr, "count": n})
+                        if len(matches) >= limit:
+                            return answer(True)
+            except OSError as e:
+                skipped(fr, f"could not be read ({e.strerror or e})")
+            if st["stopped"]:
+                break
+        if st["stopped"]:
+            break
+    return answer(False)
 
 
 def do_write(b):
@@ -721,20 +836,85 @@ def do_write(b):
         rp = os.path.realpath(parent)
         if not full and rp != root and not rp.startswith(root + os.sep):
             raise Refused(403, "that path leads outside the shared folder")
+    # a link is written through: resolve() gave the file it points to, so that file changes and the link stays
+    asked = os.path.expanduser(str(b.get("path"))) if full and is_abs(b.get("path")) else os.path.join(roots[parts[0]], *parts[1:])
+    out = {"backup": None}  # said even when none is made: a version 4 answer has no "backup" at all
+    if os.path.islink(asked):
+        out["link_to"] = real if full and is_abs(b.get("path")) else parts[0] + "/" + os.path.relpath(real, roots[parts[0]]).replace(os.sep, "/")
     if b.get("append"):
         with open(real, "ab") as f:
             f.write(data)
     else:
         # write to a temporary file next to it, then swap: a cut-short save never leaves half a file
         tmp = f"{real}.pc-files-{os.getpid()}.tmp"
+        old = os.stat(real) if os.path.isfile(real) else None
         with open(tmp, "wb") as f:
             f.write(data)
-        os.replace(tmp, real)
-    return {"size": os.path.getsize(real)}
+        if old:
+            # the new file keeps the old one's mode and (where allowed) owner: a 750 script and a 600 .env came back
+            # 644 (decision 274)
+            try:
+                os.chmod(tmp, stat.S_IMODE(old.st_mode))
+                if not IS_WIN and (old.st_uid != os.getuid() or old.st_gid != os.getgid()):
+                    os.chown(tmp, old.st_uid, old.st_gid)
+            except OSError:
+                pass  # not allowed to give it away (a file of another user): it stays ours, with the mode kept
+            # the version it replaces stays as <file>.bak (one, replaced the next time) unless the phone says not to
+            if b.get("backup") is not False:
+                bak = real + ".bak"
+                try:
+                    if os.path.islink(bak) or os.path.isfile(bak):
+                        os.remove(bak)  # a link there is not followed: the copy never lands somewhere else
+                    if not os.path.exists(bak):
+                        shutil.copy2(real, bak)
+                        out["backup"] = (bak if full and is_abs(b.get("path")) else parts[0] + "/" + os.path.relpath(bak, roots[parts[0]]).replace(os.sep, "/"))
+                except OSError as e:
+                    out["backup_error"] = f"{type(e).__name__}: {e}"
+        try:
+            os.replace(tmp, real)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+    out["size"] = os.path.getsize(real)
+    return out
 
 
 JOBS = {}  # id → {proc, out, err, cwd, command, started, timeout}
 JOBS_LOCK = threading.Lock()
+
+
+def _oem():
+    """Windows' console code page (cp850, cp437…): what cmd and most tools print in, unless told to use UTF-8."""
+    try:
+        import ctypes
+
+        return "cp%d" % ctypes.windll.kernel32.GetOEMCP()
+    except Exception:
+        return None
+
+
+def decode_out(data, cut=False):
+    """A command's output as text: UTF-8 when it is, else (on Windows) the console's code page – "Größe" came out as
+    "Gr��e" (decision 270)."""
+    if cut:
+        i = 0
+        while i < 3 and i < len(data) and (data[i] & 0xC0) == 0x80:
+            i += 1  # a character cut in two at the start of the tail
+        data = data[i:]
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    cp = _oem() if IS_WIN else None
+    if cp:
+        try:
+            return data.decode(cp)
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return data.decode("utf-8", "replace")
 
 
 def _tail(path):
@@ -744,24 +924,32 @@ def _tail(path):
             if size > MAX_OUT:
                 f.seek(size - MAX_OUT)
             data = f.read()
-        return data.decode("utf-8", "replace"), size > MAX_OUT
+        return decode_out(data, size > MAX_OUT), size > MAX_OUT
     except OSError:
         return "", False
+
+
+def _watchdog(j):
+    """The timeout is kept even when nobody asks about the job again (it was only checked on a look, decision 269)."""
+    if j["proc"].poll() is None:
+        j["timed_out"] = True
+        _kill_tree(j["proc"])
 
 
 def _job_state(jid, j):
     code = j["proc"].poll()
     if code is None and time.time() - j["started"] > j["timeout"]:
-        _kill_tree(j["proc"])
-        j["timed_out"] = True
+        _watchdog(j)
         code = j["proc"].wait()
     out, c1 = _tail(j["out"])
     err, c2 = _tail(j["err"])
     done = code is not None
-    st = {"job": jid, "running": not done, "exit": code if done else None, "stdout": out, "stderr": err, "cut": c1 or c2, "cwd": j["cwd"], "timed_out": bool(j.get("timed_out")), "seconds": round(time.time() - j["started"], 1)}
     if done and not j.get("reaped"):
         j["reaped"] = True
         j["ended"] = time.time()
+        if j.get("timer"):
+            j["timer"].cancel()
+    st = {"job": jid, "running": not done, "exit": code if done else None, "stdout": out, "stderr": err, "cut": c1 or c2, "cwd": j["cwd"], "timed_out": bool(j.get("timed_out")), "timeout": j["timeout"], "seconds": round((j.get("ended") or time.time()) - j["started"], 1)}
     return st
 
 
@@ -806,6 +994,18 @@ def do_job(b):
     return st
 
 
+def do_jobs(b):
+    """The jobs kept now, newest first – a job id lost with the chat can be found again."""
+    _sweep_jobs()
+    out = []
+    with JOBS_LOCK:
+        items = sorted(JOBS.items(), key=lambda kv: -kv[1]["started"])
+    for jid, j in items:
+        st = _job_state(jid, j)
+        out.append({"job": jid, "command": j["command"][:200], "cwd": j["cwd"], "running": st["running"], "exit": st["exit"], "timed_out": st["timed_out"], "killed": bool(j.get("killed")), "seconds": st["seconds"], "timeout": j["timeout"]})
+    return {"jobs": out}
+
+
 def do_exec(b):
     if not full:
         raise Refused(403, "running commands needs full control (start pc-files.py with --full)")
@@ -820,7 +1020,22 @@ def do_exec(b):
     wait = max(0, min(25, float(b.get("wait") if b.get("wait") is not None else 20)))
     print(f"run in {cwd}: {command}", flush=True)
     _sweep_jobs()
-    jid = "j" + secrets.token_hex(3)
+    import re
+    # the phone names the job, so a request sent again after its answer was lost runs nothing twice (decision 269)
+    jid = str(b.get("job") or "")
+    if not re.fullmatch(r"j[0-9a-f]{6,24}", jid):
+        jid = "j" + secrets.token_hex(3)
+    with JOBS_LOCK:
+        again = JOBS.get(jid)
+    if again:
+        if again["command"] != command:
+            raise Refused(409, f"job id {jid} is already used by another command")
+        end = time.time() + wait
+        while again["proc"].poll() is None and time.time() < end:
+            time.sleep(0.1)
+        st = _job_state(jid, again)
+        st["again"] = True
+        return st
     jobdir = os.path.join(config_dir(), "jobs")
     os.makedirs(jobdir, exist_ok=True)
     outp, errp = os.path.join(jobdir, jid + ".out"), os.path.join(jobdir, jid + ".err")
@@ -828,6 +1043,10 @@ def do_exec(b):
         proc = subprocess.Popen(command, shell=True, cwd=cwd, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL, creationflags=0x08000000 if IS_WIN else 0, start_new_session=not IS_WIN)  # CREATE_NO_WINDOW
     with JOBS_LOCK:
         JOBS[jid] = {"proc": proc, "out": outp, "err": errp, "cwd": cwd, "command": command, "started": time.time(), "timeout": timeout}
+    t = threading.Timer(timeout, _watchdog, (JOBS[jid],))
+    t.daemon = True
+    JOBS[jid]["timer"] = t
+    t.start()
     end = time.time() + wait
     while proc.poll() is None and time.time() < end:
         time.sleep(0.1)
@@ -863,17 +1082,79 @@ def _targets_processes(command):
     return [p for p in procs if str(p["pid"]) in pids or base(p["name"]) in want][:50]
 
 
+_DELETERS = {"rm", "del", "erase", "rd", "rmdir", "remove-item", "ri", "unlink"}
+# what runs the rest of the line as a command, and which of its own options take a value
+_WRAPPERS = {"sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U"}, "doas": {"-u", "-C"}, "env": {"-u", "-C", "-S"}, "time": set(), "nohup": set(), "nice": {"-n"}, "command": set(), "exec": set(), "timeout": {"-s", "-k"}, "builtin": set()}
+
+
+def _delete_commands(command, depth=0):
+    """The argument lists of every delete in a line: at its start, after && ; | &, behind sudo / env / time…, and inside
+    sh -c "…", cmd /c … and powershell -Command "…". Only a delete at the very start was seen: sudo rm and ls && rm were
+    previewed as hitting nothing (decision 274)."""
+    import shlex
+
+    try:
+        lx = shlex.shlex(command.replace("\n", " ; "), posix=not IS_WIN, punctuation_chars=True)
+        lx.whitespace_split = True
+        toks = list(lx)
+    except ValueError:
+        toks = command.split()
+    segs, cur, skip_next = [], [], False
+    for t in toks:
+        if skip_next:
+            skip_next = False
+            continue
+        if t and all(ch in ";&|()" for ch in t):
+            segs.append(cur)
+            cur = []
+        elif t and all(ch in "<>&" for ch in t):
+            skip_next = True  # a redirection and its target (and the 2 of 2>)
+            if cur and cur[-1].isdigit():
+                cur.pop()
+        else:
+            cur.append(t.strip('"') if IS_WIN else t)
+    segs.append(cur)
+    out = []
+    for seg in segs:
+        while seg and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", seg[0]):
+            seg = seg[1:]
+        while seg and os.path.basename(seg[0]).lower() in _WRAPPERS:
+            takes = _WRAPPERS[os.path.basename(seg[0]).lower()]
+            seg = seg[1:]
+            while seg and seg[0].startswith("-"):
+                o, seg = seg[0], seg[1:]
+                if o in takes and seg:
+                    seg = seg[1:]
+            while seg and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", seg[0]):
+                seg = seg[1:]
+            if seg and re.fullmatch(r"\d+[smhd]?", seg[0]):
+                seg = seg[1:]  # timeout's duration
+        if not seg:
+            continue
+        name = re.sub(r"(?i)\.exe$", "", os.path.basename(seg[0].replace("\\", "/"))).lower()
+        rest = seg[1:]
+        if depth < 3 and name in ("sh", "bash", "dash", "zsh", "ksh", "ash"):
+            k = next((i for i, a in enumerate(rest) if re.fullmatch(r"-[a-z]*c[a-z]*", a)), None)
+            if k is not None and k + 1 < len(rest):
+                out += _delete_commands(rest[k + 1], depth + 1)
+        elif depth < 3 and name == "cmd":
+            k = next((i for i, a in enumerate(rest) if a.lower() in ("/c", "/k")), None)
+            if k is not None:
+                out += _delete_commands(" ".join(rest[k + 1 :]).strip('"'), depth + 1)
+        elif depth < 3 and name in ("powershell", "pwsh"):
+            k = next((i for i, a in enumerate(rest) if len(a) > 1 and "-command".startswith(a.lower())), None)
+            if k is not None:
+                out += _delete_commands(" ".join(rest[k + 1 :]).strip('"'), depth + 1)
+        elif name in _DELETERS:
+            out.append(rest)
+    return out
+
+
 def _targets_files(command, cwd):
     """Files and folders a delete command would hit: [{path, dir, size, items}] (best effort)."""
-    import glob, re, shlex
+    import glob
 
-    m = re.match(r"(?i)^\s*(?:rm|del|erase|rd|rmdir|remove-item|ri)\b(.*)$", command.strip())
-    if not m:
-        return []
-    try:
-        words = shlex.split(m.group(1), posix=not IS_WIN)
-    except ValueError:
-        words = m.group(1).split()
+    words = [w for args in _delete_commands(command) for w in args]
     found = []
     for w in words:
         w = w.strip('"')
@@ -896,7 +1177,7 @@ def do_preview(b):
     return {"processes": _targets_processes(command), "files": _targets_files(command, cwd)}
 
 
-ROUTES = {"/list": do_list, "/stat": do_stat, "/read": do_read, "/search": do_search, "/write": do_write, "/exec": do_exec, "/job": do_job, "/preview": do_preview}
+ROUTES = {"/list": do_list, "/stat": do_stat, "/read": do_read, "/search": do_search, "/write": do_write, "/exec": do_exec, "/job": do_job, "/jobs": do_jobs, "/preview": do_preview}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -925,7 +1206,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authed():
             return
         if self.path.split("?")[0] == "/health":
-            return self.send(200, {"app": "pc-files", "version": VERSION, "write": allow_write, "full": full, "os": f"{platform.system()} {platform.release()}", "shell": "cmd" if IS_WIN else "sh", "host": socket.gethostname(), "folders": [{"name": n} for n in roots]})
+            return self.send(200, {"app": "pc-files", "version": VERSION, "write": allow_write, "full": full, "dotfiles": dotfiles, "os": f"{platform.system()} {platform.release()}", "shell": "cmd" if IS_WIN else "sh", "host": socket.gethostname(), "folders": [{"name": n} for n in roots]})
         self.send(404, {"error": "not found"})
 
     def do_POST(self):

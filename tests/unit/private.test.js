@@ -208,6 +208,14 @@ describe('text messages and calls', () => {
     expect((await setup().run('messages', { action: 'sms_search', since: 'last tuesday-ish' })).result).toContain('Could not read since');
     expect((await setup({ priv: { ...PRIV, messages: false } }).run('messages', { action: 'calls' })).result).toContain('switched off');
   });
+  it('a contact name in from: the numbers it matched are said, and each line has the sender name (decision 270)', async () => {
+    const { run } = setup({ over: { messages: { smsSearch: async () => ({ messages: [{ address: '+49 151 2345678', name: 'Mom', body: 'Dinner at 7?', date: 1000, type: 'inbox' }], contacts: [{ name: 'Mom', number: '+49 151 2345678' }] }) } } });
+    const r = await run('messages', { action: 'sms_search', from: 'Mom' });
+    expect(r.result).toMatch(/1 text message from “Mom” \(“Mom” matched the contact Mom \+49 151 2345678\), newest first/);
+    expect(r.result).toMatch(/from Mom \+49 151 2345678\n {2}Dinner at 7\?/);
+    const none = setup({ over: { messages: { smsSearch: async () => ({ messages: [] }) } } });
+    expect((await none.run('messages', { action: 'sms_search', from: 'Grandma' })).result).toMatch(/none was found.*try the number/);
+  });
   it('Android saying no is passed on as such', async () => {
     const { run } = setup({ over: { messages: { smsSearch: async () => Promise.reject(Object.assign(new Error('The user did not allow Chronicle to read text messages.'), { code: 'DENIED' })) } } });
     const r = await run('messages', { action: 'sms_search', query: 'x' });

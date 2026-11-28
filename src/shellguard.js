@@ -217,6 +217,7 @@ const WRAPPERS = {
   xargs: /^-(I|L|n|P|d|E|s|a)$/,
   watch: /^-(n|d)$/,
   proot: null,
+  sshpass: /^-(p|f|d|P)$/,
 };
 const base = (w) => String(w || '').split('/').pop();
 
@@ -247,12 +248,44 @@ export function unwrap(words) {
 }
 
 const DEPTH = 4;
+// ssh's own options that take a value (ssh -p 22 -i key host cmd)
+const SSH_VALUE = /^-[BbcDEeFIiJLlmOoPpQRSWw]$/;
+/** ssh [options] host [command…] → { host, payload } (payload '' for a login); null when it is not that. */
+export function sshPayload(args) {
+  let k = 0;
+  while (k < args.length && args[k].v.startsWith('-') && args[k].v !== '-') {
+    if (args[k].v === '--') {
+      k++;
+      break;
+    }
+    k += SSH_VALUE.test(args[k].v) ? 2 : 1;
+  }
+  const host = args[k];
+  if (!host) return null;
+  // the remote shell gets the words joined by spaces and splits them again, as ssh itself does
+  return { host: host.v, payload: args.slice(k + 1).map((a) => a.v).join(' ') };
+}
+/** ansible <hosts> [-m shell|command|raw] -a "<command>" → the command; '' for another module or none. */
+function ansiblePayload(args) {
+  let mod = 'command';
+  let a = '';
+  for (let k = 0; k < args.length; k++) {
+    const v = args[k].v;
+    if (v === '-m' || v === '--module-name') mod = args[++k]?.v || '';
+    else if (v.startsWith('--module-name=')) mod = v.split('=')[1];
+    else if (v === '-a' || v === '--args') a = args[++k]?.v || '';
+    else if (v.startsWith('--args=')) a = v.slice(7);
+  }
+  return /^(ansible\.builtin\.)?(shell|command|raw)$/.test(mod) ? a : '';
+}
+
 /**
  * Every simple command in a command line, with the directory it would run in when the line itself says so (cd /x &&).
- * Commands inside $( ), backticks and sh -c / bash -c / eval strings are included.
- * → [{ name, args: [word], redirects: [{ op, target, dyn }], cwd, via, pipeFrom }]
+ * Commands inside $( ), backticks and sh -c / bash -c / eval strings are included, and what ssh host "…" and
+ * ansible … -a "…" run on another computer, marked `remote` (decision 274).
+ * → [{ name, args: [word], redirects: [{ op, target, dyn }], cwd, via, pipeFrom, remote }]
  */
-export function commands(src, { cwd = WORKSPACE, depth = 0 } = {}) {
+export function commands(src, { cwd = WORKSPACE, depth = 0, remote = '' } = {}) {
   const { tokens, subs } = lex(src);
   const out = [];
   let cur = { words: [], redirects: [] };
@@ -260,7 +293,7 @@ export function commands(src, { cwd = WORKSPACE, depth = 0 } = {}) {
   let prev = null; // the command before a | in this pipeline
   const flush = (op) => {
     const { argv, via } = unwrap(cur.words);
-    const entry = argv.length || cur.redirects.length ? { name: argv.length ? base(argv[0].v) : '', args: argv.slice(1), redirects: cur.redirects, cwd: dir, via, pipeFrom: prev } : null;
+    const entry = argv.length || cur.redirects.length ? { name: argv.length ? base(argv[0].v) : '', args: argv.slice(1), redirects: cur.redirects, cwd: dir, via, pipeFrom: prev, ...(remote ? { remote } : {}) } : null;
     if (entry) {
       out.push(entry);
       // cd changes where the commands after it run (an unknown target makes the directory unknown)
@@ -271,9 +304,19 @@ export function commands(src, { cwd = WORKSPACE, depth = 0 } = {}) {
       // sh -c "…", bash -c '…', eval "…": the string is a command line of its own
       if (depth < DEPTH && ['sh', 'bash', 'ash', 'dash', 'zsh', 'ksh'].includes(entry.name)) {
         const k = entry.args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a.v));
-        if (k >= 0 && entry.args[k + 1]) out.push(...commands(entry.args[k + 1].v, { cwd: dir, depth: depth + 1 }));
+        if (k >= 0 && entry.args[k + 1]) out.push(...commands(entry.args[k + 1].v, { cwd: dir, depth: depth + 1, remote }));
       }
-      if (depth < DEPTH && entry.name === 'eval' && entry.args.length) out.push(...commands(entry.args.map((a) => a.v).join(' '), { cwd: dir, depth: depth + 1 }));
+      if (depth < DEPTH && entry.name === 'eval' && entry.args.length) out.push(...commands(entry.args.map((a) => a.v).join(' '), { cwd: dir, depth: depth + 1, remote }));
+      // ssh nas "rm -rf /volume1/backup", ansible all -a "…": the same rules on the other computer, where the folder it
+      // starts in is not known (its home) and nothing is the workspace (decision 274)
+      if (depth < DEPTH && entry.name === 'ssh') {
+        const s = sshPayload(entry.args);
+        if (s?.payload) out.push(...commands(s.payload, { cwd: null, depth: depth + 1, remote: s.host }));
+      }
+      if (depth < DEPTH && entry.name === 'ansible') {
+        const a = ansiblePayload(entry.args);
+        if (a) out.push(...commands(a, { cwd: null, depth: depth + 1, remote: entry.args.find((x) => !x.v.startsWith('-'))?.v || 'the ansible hosts' }));
+      }
       // xargs CMD: CMD runs with what comes in on stdin as more arguments
       if (entry.via.includes('xargs') && entry.name) entry.fromStdin = true;
     }
@@ -286,7 +329,7 @@ export function commands(src, { cwd = WORKSPACE, depth = 0 } = {}) {
     else flush(t.v);
   }
   flush('');
-  if (depth < DEPTH) for (const sub of subs) out.push(...commands(sub, { cwd: dir, depth: depth + 1 }));
+  if (depth < DEPTH) for (const sub of subs) out.push(...commands(sub, { cwd: dir, depth: depth + 1, remote }));
   return out;
 }
 
@@ -312,8 +355,19 @@ const under = (p, root) => p === root || p.startsWith(root + '/');
 export const onPhone = (p) => !!p && PHONE_ROOTS.some((r) => under(p, r));
 const knownVar = (w) => /^\$\{?HOME\}?(\/|$)/.test(w.v) && !/\$(?!\{?HOME\b)/.test(w.v.replace(/^\$\{?HOME\}?/, ''));
 
-/** Why removing this path (recursively) needs the user's OK, or '' when it is fine. */
-function removeRisk(cwd, w) {
+// folders a build or an install makes again: removing one anywhere but on the phone is not asked about – rm -rf
+// node_modules in /root/proj asked because it was "outside the workspace" (decision 274)
+export const REBUILDABLE = new Set(['node_modules', 'dist', 'build', '.next', '.cache', 'coverage', 'target', '__pycache__']);
+/** The path names a rebuildable folder by its own last name (no .., the name itself not a glob or a variable). */
+function rebuildable(w) {
+  const segs = String(w.v || '').split('/').filter(Boolean);
+  return segs.length > 0 && REBUILDABLE.has(segs.at(-1)) && !segs.includes('..');
+}
+
+/** Why removing this path (recursively) needs the user's OK, or '' when it is fine. `remote`: on that computer. */
+function removeRisk(cwd, w, remote = '') {
+  if (rebuildable(w) && (remote || !onPhone(resolvePath(cwd, w.v)))) return '';
+  if (remote) return `it deletes ${w.v} on ${remote}`;
   if (w.dyn && !knownVar(w)) return `the path "${w.v}" is only known when it runs (a variable or a command)`;
   const p = resolvePath(cwd, w.v);
   if (p == null) return `"${w.v}" is relative to a folder that is not known before it runs`;
@@ -368,10 +422,10 @@ export const RULES = [
         else if (recursive) return 'rm -r gets its paths from the input, so what it deletes is not known before it runs';
       }
       for (const t of targets) {
-        const risk = removeRisk(c.cwd, t);
+        const risk = removeRisk(c.cwd, t, c.remote);
         if (!risk) continue;
         // a single file outside the workspace is fine; anything on the phone is not
-        if (recursive || onPhone(resolvePath(c.cwd, t.v))) return `rm${recursive ? ' -r' : ''}: ${risk}`;
+        if (recursive || (!c.remote && onPhone(resolvePath(c.cwd, t.v)))) return `rm${recursive ? ' -r' : ''}: ${risk}`;
       }
       return '';
     },
@@ -383,6 +437,7 @@ export const RULES = [
       if (c.name !== 'find') return '';
       const deletes = c.args.some((a) => a.v === '-delete') || c.args.some((a, k) => /^-exec(dir)?$/.test(a.v) && base(c.args[k + 1]?.v) === 'rm');
       if (!deletes) return '';
+      if (c.remote) return `find -delete removes files on ${c.remote}`;
       const paths = findPaths(c);
       const p = paths.map((w) => resolvePath(c.cwd, w.v)).find((x) => x == null || onPhone(x));
       if (p === undefined) return '';
@@ -449,8 +504,14 @@ export const RULES = [
       if (claude) return claude;
       // the app's stored sign-in and SSH key: only git may use them, nothing reads or copies them
       if ([...c.args, ...c.redirects.map((r) => ({ v: r.target || '' }))].some((a) => /\.config\/chronicle\/(ssh|gh-token)/.test(String(a.v)))) return 'it touches the GitHub sign-in or SSH key the app keeps for git';
+      const secret = touchesSecretFile(c);
+      if (secret) return secret;
       if (c.name === 'gh' && sub === 'ssh-key' && ['add', 'delete'].includes(c.args[1]?.v)) return `gh ssh-key ${c.args[1].v} changes the SSH keys on your GitHub account`;
       if (c.name === 'gh' && sub === 'auth' && ['token', 'login', 'refresh'].includes(c.args[1]?.v)) return `gh auth ${c.args[1].v} prints or replaces the GitHub sign-in`;
+      if (c.name === 'gh' && sub === 'auth' && c.args[1]?.v === 'status' && (hasLong(c.args, '--show-token') || /t/.test(shortFlags(c.args.slice(2))))) return 'gh auth status --show-token prints the GitHub sign-in';
+      // git credential fill prints the stored token; approve / reject change what is stored (decision 274)
+      const gs = c.name === 'git' ? gitSub(c.args).sub : '';
+      if (gs === 'credential' || gs === 'credential-store' || gs === 'credential-cache') return `git ${gs} hands out or changes the stored GitHub sign-in`;
       if (c.name === 'gh' && sub === 'api' && c.args.some((a) => /(^|\/)(user\/keys|keys)(\b|$)|deploy_keys|authorizations/.test(a.v))) return 'gh api on keys or authorizations adds or changes credentials on your GitHub account';
       if (c.name === 'git' && c.args.some((a) => /^credential\.helper=?/.test(a.v) || a.v === 'credential.helper') && c.args.some((a) => /store/.test(a.v))) return 'git credential store writes a token to a plain file';
       for (const r of c.redirects) {
@@ -465,6 +526,7 @@ export const RULES = [
     id: 'phone-overwrite',
     what: '> /phone/… (overwriting), mv/cp onto the phone, tee onto the phone',
     test(c) {
+      if (c.remote) return ''; // a /phone on another computer is not the phone
       for (const r of c.redirects) {
         if (!/^(>|>\||&>)$/.test(r.v)) continue;
         const p = r.dyn ? null : resolvePath(c.cwd, r.target);
@@ -533,6 +595,58 @@ function touchesClaudeSignIn(c) {
   return '';
 }
 
+// ---------- the app's GitHub sign-in and SSH keys (decision 274) ----------
+// The app keeps the GitHub token in ~/.config/chronicle/gh-token (gh's copy in ~/.config/gh/hosts.yml) and the SSH key
+// in ~/.config/chronicle/ssh; the user's own keys are in ~/.ssh. Only the literal path ".config/chronicle/(ssh|gh-token)"
+// was caught: cd into the folder and cat gh-token, a glob (chron*/gh-tok*), grep -r over ~/.config, gh's hosts.yml and
+// git credential fill all printed the token. Now a word is resolved against the folder the line cd'd into, a glob is
+// matched against the files it could hit, and tools that take whole folders (cp -r, tar, grep -r, scp -r…) ask on a
+// folder that holds them. A private key (id_rsa, id_ed25519… – not .pub) asks wherever it is.
+const SECRET_FILES = ['/root/.config/chronicle/gh-token', '/root/.config/chronicle/ssh/id_ed25519', '/root/.config/chronicle/ssh/id_rsa', '/root/.config/gh/hosts.yml', '/root/.git-credentials', '/root/.ssh/id_rsa', '/root/.ssh/id_ed25519', '/root/.ssh/id_ecdsa', '/root/.ssh/id_dsa', '/root/.ssh/id_ed25519_sk', '/root/.ssh/id_ecdsa_sk'];
+const SECRET_DIRS = ['/root/.config/chronicle', '/root/.config/gh'];
+const HOLDS_SECRETS = ['/', '/root', '/root/.config', '/root/.config/chronicle', '/root/.config/chronicle/ssh', '/root/.config/gh', '/root/.ssh'];
+const KEY_NAMES = ['id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa', 'id_ed25519_sk', 'id_ecdsa_sk'];
+// ssh and friends use a key with -i / -o IdentityFile=…: that is using it, not handing it out
+const USES_KEYS = new Set(['ssh', 'scp', 'sftp', 'ssh-copy-id', 'rsync', 'sshfs', 'autossh', 'mosh']);
+const isSecretPath = (p) => SECRET_FILES.includes(p) || SECRET_DIRS.some((d) => p.startsWith(d + '/')) || KEY_NAMES.includes(p.split('/').pop());
+/** A command that takes whole folders (cp -r, tar, grep -r, scp -r, rsync, zip, find -exec). */
+function takesWholeFolders(c) {
+  const flags = shortFlags(c.args);
+  if (['tar', 'zip', '7z', 'rsync', 'rclone', 'rg', 'ag', 'ack', 'mv'].includes(c.name)) return true;
+  if (c.name === 'cp' || c.name === 'scp') return /[rRa]/.test(flags) || hasLong(c.args, '--recursive', '--archive');
+  if (['grep', 'egrep', 'fgrep'].includes(c.name)) return /[rR]/.test(flags) || hasLong(c.args, '--recursive', '--dereference-recursive', '--directories=recurse');
+  if (c.name === 'find') return c.args.some((a) => /^-(exec|execdir|ok|okdir)$/.test(a.v));
+  return false;
+}
+function touchesSecretFile(c) {
+  if (LOOK_ONLY.has(c.name) || c.name === 'ssh-keygen' || c.name === 'ssh-add') return ''; // looking, or a rule of their own
+  const uses = USES_KEYS.has(c.name);
+  const words = [];
+  c.args.forEach((a, k) => {
+    if (uses && (/^-[io]./.test(a.v) || ['-i', '-o', '-e'].includes(c.args[k - 1]?.v))) return; // the key it logs in with
+    words.push({ ...a, v: a.v.replace(/^--?[\w-]+=/, '').replace(/^[\w-]*=?@/, '') });
+  });
+  for (const r of c.redirects) words.push({ v: r.target || '', dyn: r.dyn });
+  const whole = takesWholeFolders(c);
+  for (const w of words) {
+    // host:path is on the other computer (scp ~/.ssh/id_rsa host: still names the local key)
+    if (!w.v || w.v.startsWith('-') || (/^[\w.-]+(@[\w.-]+)?:/.test(w.v) && !w.v.startsWith('/'))) continue;
+    const p = resolvePath(c.cwd, w.v);
+    if (!p) continue;
+    const leaf = p.split('/').pop();
+    if (w.glob) {
+      const re = globRe(p);
+      const leafRe = globRe(leaf);
+      if (SECRET_FILES.some((t) => re.test(t)) || (/id_/.test(leaf) && KEY_NAMES.some((n) => leafRe.test(n)))) return `${c.name} ${w.v} can match the GitHub sign-in or an SSH private key`;
+      if (whole && HOLDS_SECRETS.some((d) => re.test(d))) return `${c.name} on ${w.v} would take the GitHub sign-in or SSH keys with it`;
+      continue;
+    }
+    if (isSecretPath(p)) return `it reads or copies ${KEY_NAMES.includes(leaf) ? 'an SSH private key' : 'the GitHub sign-in the app keeps for git'} (${w.v})`;
+    if (whole && HOLDS_SECRETS.includes(p)) return `${c.name} on ${w.v} would take the GitHub sign-in or SSH keys with it`;
+  }
+  return '';
+}
+
 /** The starting points of a find command (the words before its first expression). */
 function findPaths(c) {
   const out = [];
@@ -546,7 +660,9 @@ function findPaths(c) {
 
 /**
  * Does this command need the user's OK first? → null, or { reason, rule, command } for the first match.
- * `cwd` is where the shell is assumed to start (the workspace); a `cd` in the line itself is followed.
+ * `cwd` is where the shell is assumed to start: the workspace unless the caller knows better (the chat's shell keeps
+ * the folder an earlier command cd'd into, and starts in /root) – pass it when known, or null for "not known", which
+ * makes a relative rm -r ask (decision 274). A `cd` in the line itself is followed.
  */
 export function shellDanger(cmd, { cwd = WORKSPACE, askPush = false } = {}) {
   let list;

@@ -57,6 +57,7 @@ import './app/btw.js';
 import './app/info.js';
 import { loadConvs, newChat, refreshUsage, setMode } from './app/chatlist.js';
 import { refreshModels, updateModelUI } from './app/composer.js';
+import { hasUsableModel } from './models.js';
 import { appMode, chatPersona, hooks, pref, setAppMode, state } from './app/core.js';
 import { trackSites } from './perf.js';
 import { updateShortcuts, updateToolsChip } from './app/extras.js';
@@ -90,9 +91,14 @@ import { openSettings } from './app/settings.js';
   updateHeader();
   updateToolsChip();
   updateModelUI();
-  refreshModels(true);
+  const modelsLoaded = refreshModels(true);
   refreshUsage(true);
-  if (!state.settings.apiKey) setTimeout(openSettings, 300);
+  // Settings opens by itself only when there is no model to use at all – not for someone on a custom endpoint, the
+  // on-device model or Claude Code without an OpenCode Go key (decision 275)
+  if (!state.settings.apiKey)
+    Promise.resolve(modelsLoaded)
+      .catch(() => {})
+      .then(() => !hasUsableModel(state.settings, state.models, hooks.ccJobModels?.() || []) && openSettings());
   hooks.restoreDraft?.();
   hooks.renderQuickBar?.();
   watchIcons(); // icons in place of the interface's emoji (line icons first; another pack redraws them)

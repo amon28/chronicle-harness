@@ -3,6 +3,9 @@ import { openSheet, selectConv } from './chatlist.js';
 import { $, el, hooks, state, toast } from './core.js';
 import { persist } from './chatlist.js';
 import { acceptEvent, testEvent, PER_HOUR } from '../triggers.js';
+import { netName } from '../lan.js';
+import { forgetChatOks } from '../device.js';
+import { toolLabel } from '../tools.js';
 
 // ---------- to-do list ----------
 function updateTodoChip() {
@@ -144,9 +147,70 @@ function openScheduled() {
 }
 hooks.openScheduled = openScheduled;
 
+// ---------- what this chat was allowed (decision 271) ----------
+const DEVICE_OK = { calendar: '🗓 Read the calendar', contacts: '👥 Look up contacts', location: '📍 Approximate location', 'precise location': '📍 Exact location', places: '🗺 Places nearby', wifi: '📶 Wi-Fi names' };
+function grantsOf(c) {
+  const out = [];
+  if (c?.lanGrant?.ips?.length) out.push({ key: 'lan', text: `🏠 Local network: ${c.lanGrant.ips.join(', ')} – on ${netName(c.lanGrant.net)}` });
+  for (const w of c?.deviceOks || []) out.push({ key: 'dev:' + w, text: DEVICE_OK[w] || w });
+  for (const t of c?.allowedTools || []) out.push({ key: 'tool:' + t, text: `✅ ${toolLabel(t)} without asking` });
+  return out;
+}
+function updateGrantsChip() {
+  const c = state.current;
+  const g = grantsOf(c);
+  const btn = $('#grants-btn');
+  btn.hidden = !g.length;
+  if (btn.hidden) return;
+  btn.textContent = c.lanGrant?.ips?.length ? `🏠 ${c.lanGrant.ips.length === 1 ? c.lanGrant.ips[0] : `${c.lanGrant.ips.length} local`}${g.length > 1 ? ` +${g.length - 1}` : ''}` : `🔓 ${g.length} allowed`;
+  btn.title = 'What this chat was allowed – tap to see or take back';
+}
+function takeBack(c, key) {
+  if (key === 'lan') delete c.lanGrant;
+  else if (key.startsWith('dev:')) {
+    c.deviceOks = (c.deviceOks || []).filter((w) => w !== key.slice(4));
+    forgetChatOks(c.id, key.slice(4));
+  } else if (key.startsWith('tool:')) c.allowedTools = (c.allowedTools || []).filter((t) => t !== key.slice(5));
+}
+function renderGrants() {
+  const ul = $('#grants-items');
+  ul.innerHTML = '';
+  for (const g of grantsOf(state.current)) {
+    const li = el('li', 'grant-row');
+    li.append(el('span', 'grant-text', g.text));
+    const x = el('button', 'ghost-btn small grant-x', 'Take back');
+    x.dataset.key = g.key;
+    x.onclick = () => {
+      takeBack(state.current, g.key);
+      hooks.grantsChanged(state.current);
+      if (!grantsOf(state.current).length) openSheet('#grants-sheet', false);
+      else renderGrants();
+      toast('Taken back');
+    };
+    li.append(x);
+    ul.append(li);
+  }
+}
+hooks.grantsChanged = (c) => {
+  if (c && c !== state.current) return void persist(c);
+  updateGrantsChip();
+  persist();
+};
+$('#grants-btn').onclick = () => {
+  renderGrants();
+  openSheet('#grants-sheet', true);
+};
+$('#grants-clear').onclick = () => {
+  for (const g of grantsOf(state.current)) takeBack(state.current, g.key);
+  hooks.grantsChanged(state.current);
+  openSheet('#grants-sheet', false);
+  toast('Everything taken back');
+};
+
 const prev = hooks.toolsChanged;
 hooks.toolsChanged = () => {
   prev?.();
+  updateGrantsChip();
   updateTodoChip();
   updateGoalChip();
   updateSchedChip();

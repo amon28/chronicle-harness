@@ -205,3 +205,12 @@ describe('the shell gets the GitHub sign-in', () => {
   });
 });
 
+
+describe('a push that changes a workflow (decision 276)', () => {
+  it('is explained, and no other credential is looked for', async () => {
+    const { githubHint } = await import('../../src/github.js');
+    const h = githubHint("! [remote rejected] main -> main (refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)", 'oauth');
+    expect(h).toMatch(/changes a file in \.github\/workflows/);
+    expect(h).toMatch(/Do not look for another credential/);
+  });
+});

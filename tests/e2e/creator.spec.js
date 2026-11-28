@@ -1,5 +1,6 @@
 import { test, expect } from './helpers.js';
 import { fileURLToPath } from 'node:url';
+import { BUILTIN_PERSONAS } from '../../src/personas.js';
 
 test.use({ appSettings: { prefs: { tools: true } } });
 
@@ -140,4 +141,31 @@ test('the assistant can make a roleplay preset and make it the default, after yo
   expect(noir.rpNote).toBe('Rain, always rain.');
   expect(noir.rpPhi).toMatch(/Let the story breathe/);
   expect(s.rpPresetId).toBe(noir.id);
+});
+
+// Decision 265: a roleplay persona that is not a full card – its greeting and extra greetings can be changed too
+test.describe('a roleplay persona', () => {
+  const LIA = { id: 'p_lia', name: 'Lia', rp: true, prompt: 'You are Lia, a witch.', card: { first_mes: 'Hi.', alternate_greetings: ['Hello again.'] } };
+  test.use({ appSettings: { prefs: { tools: true }, personas: [...BUILTIN_PERSONAS.map((p) => ({ ...p, builtin: true })), LIA] } });
+  test('the assistant changes its greeting and adds one, after you approve', async ({ app }) => {
+    await app.fill('#input', 'GREETLIA give Lia a better greeting');
+    await app.click('#send-btn');
+    await expect(app.locator('#ask-question')).toContainText('Change the persona “Lia”: greeting, +1 greeting');
+    await expect(app.locator('#ask-question')).toContainText('Greeting: *looks up from her spellbook* Welcome to my tower.');
+    await app.click('#ask-options .menu-item:has-text("Change it")');
+    await app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 20000 });
+    const lia = await app.evaluate(
+      () =>
+        new Promise((res) => {
+          const r = indexedDB.open('chronicle');
+          r.onsuccess = () => {
+            const q = r.result.transaction('kv').objectStore('kv').get('settings');
+            q.onsuccess = () => res(q.result.personas.find((p) => p.id === 'p_lia'));
+          };
+        }),
+    );
+    expect(lia.card.first_mes).toBe('*looks up from her spellbook* Welcome to my tower.');
+    expect(lia.card.alternate_greetings).toEqual(['Hello again.', '*adjusts her hat* Oh, a visitor.']);
+    expect(lia.prompt).toBe('You are Lia, a witch.');
+  });
 });

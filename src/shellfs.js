@@ -23,7 +23,7 @@ const MAX_ENTRIES = 20000;
  */
 // (also caches a tool makes in the chat's folder – a virtualenv, Python's bytecode, a build cache, decision 259; the same
 // list is in FileModePlugin.java)
-export const SHELL_ONLY = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__', '.next', '.cache', '.gradle', '.tox', '.mypy_cache', '.pytest_cache', 'target']);
+export const SHELL_ONLY = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__', '.next', '.cache', '.gradle', '.tox', '.mypy_cache', '.pytest_cache', 'target', '.pio', '.dart_tool', '.expo', '.kotlin', '.cxx', '.pnpm-store', '.turbo', '.parcel-cache', '.svelte-kit']);
 /** Is this path inside a directory the app does not mirror? */
 export const shellOnly = (p) => String(p).split('/').some((s) => SHELL_ONLY.has(s));
 const CHUNK = 4 * 1024 * 1024; // base64 of this is ~5.3 MB: the heap spike per call

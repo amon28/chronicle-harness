@@ -58,7 +58,7 @@ export const goalNudge = (goal, n) =>
   `[Goal check ${n}/${GOAL_NUDGES}] Your goal is still open: ${goal.text}\nIf it is finished, check it (run it, test it) and call goal with action "done" and the evidence. If you cannot continue without the user, call goal with action "blocked" and say what you need. Otherwise continue working now – do not ask whether to continue.`;
 
 // ---------- repeat guard ----------
-const FREE = new Set(['shell_job', 'todo_write', 'ask_user', 'goal', 'schedule_task']); // waiting on a job, updating a plan: repeating is the point
+const FREE = new Set(['shell_job', 'pc_job', 'todo_write', 'ask_user', 'goal', 'schedule_task']); // waiting on a job, updating a plan: repeating is the point
 /**
  * Stops loops: the third identical call (same tool, same arguments) whose result came back the same twice is not run;
  * the assistant is told to change approach. Any call that is identical for the sixth time is stopped too.

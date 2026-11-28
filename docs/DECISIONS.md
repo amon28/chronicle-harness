@@ -867,3 +867,232 @@ Older WebViews without that API still get the freeze and long-task lists.
 - **The fix:** the camera's task is now cleared whenever Chronicle opens it, so it starts afresh with what is asked.
 - **No more toast after a recording:** "Recorded … – it is in this chat's folder" is gone. The chip in the message box already shows the video.
 - **Not tested on a phone:** the clearing of the camera's task (it compiles; the camera tests use a stand-in for it).
+
+265. **A stronger persona tool (owner: "make persona tool stronger… the AI said it can only change its description and not its greetings or alternate greetings").**
+- **The cause:** a roleplay persona that is not a full card keeps its greeting (and extra greetings) in a small card of its own. edit_persona treated it as a chat persona, which had only name, description, prompt and emoji, and read_persona did not show its greetings, so the assistant could not see or change them.
+- **Now, for every persona:**
+  - read_persona shows its greeting, its extra greetings and whether it is for roleplay;
+  - edit_persona can set or edit the greeting (exact text edits, like the other fields), set the extra greetings whole, or add and remove some by number;
+  - a number that is not there says how many there are.
+- **For a character (a full card):** the character's note (depth prompt) can be set or edited as text; its depth and role stay as they were, or are the usual ones (depth 4, system) for a new one.
+- **The picture:** edit_persona takes `image` like save_character, so a picture the user sent becomes the persona's or character's picture.
+- **The question asked before a change** shows the new greeting in full, since it is what the chats will open with.
+- **The tool's description** says all this, so the assistant knows it can.
+
+266. **The assistant can see a persona's picture (owner: "also add that it can see persona image card").** read_persona takes `picture: true`:
+- **What it returns:** the persona's full card art, or its avatar picture when there is no card art, shrunk the way view_images shrinks pictures.
+- **Who sees it:**
+  - A model that can see pictures gets the picture itself after the result. Claude Code gets it as an image in the MCP answer.
+  - For one that cannot, a vision model describes it (appearance, clothing, colours, pose, mood, style), as view_images does.
+  - A persona with only an emoji avatar says so.
+- **Uses:** describing the character, writing a greeting or description that fits the picture, or comparing it with a new picture before edit_persona's `image` replaces it.
+
+267. **"Use Claude Opus" (owner: "when I ask a model to use a claude model it will say it doesn't have that model. I need to say to use delegate on that model and only then will delegate say that model doesn't exist but it can use this model, same name but it has some id value").**
+- **Two causes:**
+  - Nothing told the chat's model that a model the user names is reached through delegate, so it answered that it did not have it.
+  - delegate took only an exact id or exact name. The model passed what it knew ("Claude Opus 5.5", or the bare API id "claude-opus-5-5"), and the user's id for it is provider-prefixed ("anthropic:claude-opus-5-5"). It was refused with a list that held that very model. With 40 models or fewer, the tool's parameter was also a fixed list of ids, which some providers enforce before the app sees the call.
+- **Now (findModel), a model is found by any of:**
+  - its exact id, or its name in any case;
+  - its id without the provider in front;
+  - the id or name with spaces, dots and dashes ignored;
+  - words that fit that one model only ("haiku", "opus 5.5").
+- **When it is not found:** words that fit several give them as "name → id" to pick from; a model that is not there is refused as before, listing the near ones as "name → id".
+- **Where it applies:** delegate and Claude Code's ask_model. The model parameter has no fixed list any more; the list of the user's models stays in its description.
+- **The chat's model is told:** when the user asks for another model by name, call delegate with it, never say it does not have it before trying, and say which model answered.
+
+268. **The browser says what it refused to load from the local network (blind review, round 1).** Before, a local address was blocked without a word: a link to one did nothing, a frame from one was an empty box, and the element list told the model to take a screenshot and click inside it. The block was also checked only on the typed address, so a name that points to a local address (router.lan, a vendor's name for its router) got through. Now:
+- **Names are looked up too.** The phone's browser resolves a name off the screen's thread and refuses it when it points to a local address. Each answer is kept for a minute.
+- **Each refusal is noted:** a page, a frame or file, or a link, plus the address it went to. The next status reports these notes, once.
+- **The model is told after the action:** "[Not loaded – the app blocks local-network addresses, so nothing was sent to them: …]".
+- **The element list marks a local frame** as "NOT LOADED: the app blocks local-network addresses … nothing inside to read or click", instead of "another site … click inside it".
+
+269. **Tool results that sent the model the wrong way (blind review, round 1).**
+- **PC jobs:**
+  - A job's timeout now ends it on the PC even when nobody asks about it again. Before, it was checked only on a look.
+  - The phone names the job (a random id), so a request sent again after its answer was lost runs nothing twice.
+  - A timed-out answer names the job and says not to run the command again to find out.
+  - A running job says when its timeout will stop it. A stopped one says it ran past its timeout and suggests a bigger timeout_s.
+  - `pc_job` action `list` shows every job kept on the PC; this needs pc-files.py version 4, and an older one is told to update.
+  - pc_job no longer counts as a repeat in the loop guard.
+- **shell_job:** an id from the job script (`job run`) gets "follow it there: job out <id>" instead of only "No job". The shell tool no longer says that a command started with & can be followed with shell_job.
+- **pc_read past 4 MB:**
+  - Lines are read in 4 MB parts, up to 32 MB in.
+  - `tail_lines` shows the end of a big log.
+  - `offset` (bytes) reads a part from the middle, and its "more after byte N" note gives the next offset.
+  - A line that is not there says how many lines there are. A line past the reach says to use tail_lines or offset. Before, it said "has no line N" whenever the line was not in the first 4 MB.
+- **load_tools list:**
+  - The app's own tools come first, then the rest with their one-line description while they fit.
+  - After that come names only, and finally "… and N more – use a query".
+  - Before, the list was cut at 9,000 characters, so calendar or claude_code could be lost behind a hundred MCP tools.
+- **delegate and Claude Code models:** a model that only the user's Claude Code has is answered with "give the task to the claude_code tool instead, with model …". For a Claude-like name that matches no model, Claude Code's choices are listed.
+- **browser console:** the result says it holds what the app's catcher saw in this page. Messages logged before it started, or inside a frame from another site, are missing, so an empty list is not proof of a clean page.
+- **Repeated calls left out of the prompt:** an older result is no longer left out for the newer one when the call reads state that changes: shell, shell_job, pc_shell, pc_job, Python, scripts, the browser, page previews, phone status, Claude Code, fetch_url or web search. A git status before and after a commit was stubbed as "its newer result is further down".
+- **Shortened arguments of a failed call:** these now say "[shortened here to save room: N more characters were sent in this call]". Before, they said "… left out – this call failed", which read as the reason it failed.
+- **doctor:**
+  - The Linux script says which network failure it was: name not found, could not connect, timed out, TLS, or the connection broke off.
+  - A site that answers with an error page counts as reached.
+  - Before, every failure was "BLOCKED".
+  - The app's network row says it covers the app's own requests only, and that local-network addresses are refused by those tools.
+
+270. **Gaps a normal user would hit (blind review, round 2).**
+- **Attachments:**
+  - A big attached PDF also gets its text as `<name>.pdf.txt` in the workspace, and the prompt points there. Before, "read it with tools" pointed at the PDF's raw bytes.
+  - The note says when only the first pages' text fits.
+  - Word, Excel, PowerPoint and OpenDocument files are read instead of refused as "binary": paragraphs, slides in order, and each sheet as CSV. Their text also goes to the workspace beside the file.
+- **fetch_url reads PDFs:** the PDF is fetched as bytes and its text is taken out on the phone with pdf.js. A scan (a PDF with no text in it) is said to be one.
+- **Texts from a contact:** `from: "Mom"` also searches the numbers of contacts with that name. Before, the sender of a text is a number, so a name found only senders that are names (DHL). The result says which contacts it matched, each line has the sender's name, and a name that matched nobody says to try the number.
+- **"Switched off right now"** names every group with its own Settings path: the Phone ones, sensitive phone access, and Files on my PC. It says not to claim having no such ability at all.
+- **pc_shell asks before a kill or delete only when it is the command:**
+  - That means at the start, after ; & | ( or after sudo / xargs.
+  - git log --format, Format-Table, "echo kill" and "grep shutdown" no longer stop to ask.
+- **search_chats:**
+  - Words match where a word starts ("cat" no longer finds "locate").
+  - `since` / `before` take a date or 7d / 3w / 2m.
+  - Each hit has the date of its best match.
+  - It says that roleplay chats are not searched.
+- **Alarms:**
+  - The question and the result say the day: today, or tomorrow when the time has passed.
+  - `days` repeats on weekdays (Android's day numbers, passed as a list).
+- **Pictures from an MCP tool**, for a model that cannot see them, are described by a vision model, as screenshots are.
+- **Personas:**
+  - A name that fits several lists them, and a name that fits none lists what exists.
+  - A long read is cut with a "[cut: …]" marker, not in the middle of a field.
+  - A change says when it shows: greetings in new chats only, the rest from the next reply.
+- **Roleplay presets:** the question names the fields in words ("author's note", not rpNote). The result says where a preset reaches a chat.
+- **Calendar, contacts and location OKs** are kept with the chat, so an app restart does not ask again. They are not copied to a branch.
+- **Approvals name tools in words:** "Allow ✏️ Write files", as the Permissions list says it; a saved tool by its own name. Not the raw tool name.
+- **Calendar and contacts say when results were cut:**
+  - A span over a year is cut to a year, and the result says so and says where to ask again.
+  - A full page of events or contacts says more may exist.
+- **load_tools lines** are cut at a word with "…". A too-short first sentence takes the next one.
+- **pc-files.py on Windows:** a command's output that is not UTF-8 is read in the console's code page (cp850…), so "Größe" no longer comes out garbled.
+
+271. **A chat may reach exact addresses on the user's own network, only with their OK (consent-gated LAN scope).** By default nothing changes: fetch_url and the browser still never reach the local network.
+- **Asking:**
+  - The new tool `local_network` (loaded on demand) asks with `action: "request"`, `addresses` and a reason.
+  - The question names the addresses and the network.
+  - It says it holds only on that network until the user takes it back, that helpers and scheduled runs never get it, and that the Linux shell is not limited by it at all.
+- **What can be allowed:**
+  - Literal private IPv4 addresses only (10.x, 172.16–31.x, 192.168.x).
+  - Never a name: it could be pointed anywhere after the OK.
+  - Never the phone itself, link-local (cloud metadata) or carrier-grade NAT.
+  - At most 16 per chat.
+- **Tied to the network it was given on:**
+  - The BSSID when Android shows it (precise location). Otherwise the gateway, the subnet and the DNS servers.
+  - These come from a new permission-free `Phone.lanNet`.
+  - On another network the addresses are blocked again, and `status` says so.
+- **Where it is enforced:**
+  - fetch_url reads an allowed address directly and never through the outside renderer or Exa, which must not be told it.
+  - GoStreamPlugin's guarded reads (text, and the PDF bytes of decision 270) accept an allowed literal only for a request that starts there. A public page that redirects to the user's network is still refused at every hop.
+  - The browser opens an allowed address with its list, and goes from there to another allowed one.
+  - The browser never follows a redirect into the list from elsewhere.
+  - The browser loads a local address only while the page shown is itself on an allowed one, so a public page reached from there cannot embed or fetch it.
+- **Who never gets it:** helpers (delegate), Claude Code's cross tools, and scheduled or proactive runs. They get no grant at all.
+- **Seen and taken back:**
+  - A 🏠 chip above the message box shows the grant. Its sheet ("Allowed in this chat") lists it together with the calendar / contacts / location OKs of decision 270 and the tools allowed "for this chat".
+  - Each can be taken back on its own, or all at once.
+  - A branch of the chat starts with none of them.
+- **Not covered:** downloads from a local address are still refused.
+
+272. **What a phone-native developer meets in the Linux shell (field review: Android / IoT developer).**
+- **DNS:** the shell's DNS is the phone's network's own, written at each shell start (then 1.1.1.1 / 8.8.8.8, and the network's search domain). Before, it was 1.1.1.1 / 8.8.8.8 once at install, so `nas.lan` or a router's names never resolved, and a network that blocks public DNS left the shell with none. A resolv.conf the user replaced themselves is left alone.
+- **Skill docs:** the chronicle-harness and chronicle-playbook skills said "Alpine, apk add". The shell has been Debian since decision 190.
+- **More caches stay in the shell:** .pio, .dart_tool, .expo, .kotlin, .cxx, .pnpm-store, .turbo, .parcel-cache and .svelte-kit are no longer mirrored into the app (JS and Java lists).
+- **doctor** also checks java, adb and gcc.
+- **Finding the network:**
+  - `local_network status` now gives the subnet, gateway, the phone's own address and the DNS servers.
+  - The refusal hint no longer suggests `ip route` and `arp`, which an Android app cannot use. It points to that status, `getent hosts`, and `nmap -sT`.
+
+275. **What a student or a data analyst meets (field reviews; built by a helper, merged as one commit).**
+- **Offline model:** the system prompt is always kept. Trimming from the newest turns dropped it after a few long turns, and the kept history no longer starts on an assistant turn.
+- **Read aloud:**
+  - Only real HTML tags are taken out, so `i < n`, `vector<int>` and `snake_case` are read.
+  - Simple math is spoken ($O(n \log n)$ → "O of n log n"); a complex formula is read as "(formula)".
+- **Markdown:**
+  - A non-HTML `<tag>` outside code (`std::vector<int>`, `HashMap<String, List<Integer>>`, `#include <iostream>`) is shown, not eaten as HTML.
+  - A short compiler or traceback paste is fenced as code.
+  - `|` inside $…$ in a table cell no longer splits the cell.
+  - A bare `\begin{align}` block is display math.
+- **Prices:**
+  - OpenRouter-style `pricing` and models.dev `cost` become the model's price.
+  - The usage view says "price unknown" instead of $0 for a model with no price.
+  - `…:free` ids get the FREE badge.
+- **Tools on a model that cannot use them:** the 🛠 chip says "not with this model".
+- **Settings at start** opens only when there is no usable model at all (no key, no other provider, no offline model, no Claude Code model).
+- **Attachments:**
+  - A small binary file (parquet, SQLite, xls, npy, pkl, gz) goes into the workspace with a note on how to open it, instead of "looks like a binary file". It is refused only in a chat without tools.
+  - UTF-16 text (an Excel CSV export) is read as text.
+  - The note for a big file put in the chat folder says what can reach it, depending on whether Linux is installed and the chat has the shell.
+  - Excel date cells are shown as dates, with a note about stored values and pandas.read_excel.
+  - A PDF's note says figures and formula layout are not included.
+- **Tools sent on demand:** roleplay_presets (2.8 K characters) waits in load_tools.
+- **Snippets:** new study snippets /quiz, /flashcards and /explain-error.
+
+276. **Field reviews: engine, prompts and intents.**
+- **Unattended runs never wait on a question:** a scheduled, quiet or proactive run gets no `ask`. A tool set to "ask first" is not run there and says so. Before, a question opened and waited forever, and while it was open every later check of that chat was skipped.
+- **Approvals show how much is cut:** "[N more characters not shown]". A dangerous shell command shows the part that triggered the guard first. Before, the text was cut silently at 300–400 characters.
+- **A running shell job keeps the app alive** after the reply ends. Before, the background service stopped 1.2 s after the reply, so Android could freeze the app and the Linux mid-job. Checked every 15 s.
+- **Every non-roleplay chat** is told that ```mermaid blocks, $…$ math, tables and code render.
+- **The shell prompt says:** Debian on ARM64 under proot; x86_64 toolchains do not run; npm is a separate package; pip needs apt or a venv; no USB, serial, Bluetooth or raw sockets; `job run` for anything over 10 minutes. The timed-out result says the same, plus `dpkg --configure -a`.
+- **File tools refuse paths outside /workspace:** read_file, write_file, edit_file and the others refuse an absolute path outside /workspace (/root/app/x.js) with where to go. Before, cleanPath dropped the slash and `write_file /root/app/x.js` wrote `/workspace/root/app/x.js`. The shell's guidance now says a project edited with the file tools belongs in /workspace/<name>.
+- **Intents:**
+  - New `deep_link` kind opens an app's own scheme (myapp://, homeassistant://, market://), optionally in one package, after asking. file, content, intent and javascript links are refused, in JS and in IntentsPlugin.
+  - New settings pages: developer, nfc, vpn.
+  - An APK is still never installed or handed over; the refusal says how the user installs it themselves.
+- **LAN grant:** another access point of the same Wi-Fi (same name, gateway and subnet) counts as the same network. A scheduled run's refusal says the shell reaches the network, or to run it in the chat.
+- **GitHub:** a push refused for changing .github/workflows is explained. The sign-in leaves the workflow permission out on purpose; the user pushes it themselves or gives a fine-grained token.
+- **Scheduled checks Android could not run:**
+  - The notification says "Did not run – Android had closed Chronicle", with how to let it run in the background. It replaces itself quietly.
+  - A repeating task is set again natively, so it does not stop after one missed run.
+
+273. **The harness against injected content (field review: security engineer; built by a helper).**
+- **run_python can no longer reach the app's data:**
+  - Pyodide gets a short `jsglobals` list and a fetch that only downloads packages, by GET or HEAD with no credentials, from its own index or PyPI.
+  - Once loaded, the worker loses IndexedDB, caches, XHR, WebSocket, EventSource, workers, importScripts and storage. If that cannot be done, Python does not start.
+  - A short jsglobals alone was not enough: the Function constructor reaches the worker's global anyway.
+  - Still possible: such code can `import()` a remote script, but there is no storage left to carry away.
+- **Mods and run_script frames talk over a MessagePort**, handed to the frame's own page before its code runs.
+  - A page the frame navigates to can neither send nor receive. A sandboxed frame keeps origin "null" after navigating, so an origin check would not have helped.
+  - Navigation is cancelled where the Navigation API exists. A frame that leaves anyway says so on pagehide, and the mod stops.
+- **A mod's `net:` permission holds on every hop:**
+  - Redirects are followed by hand. Each hop must be https, inside the permission, and public by text and by resolved address (new `GoStream.checkPublic`).
+  - Credentials are dropped when the origin changes.
+- **browser `state save`** (cookies, sign-ins) asks every time and names the site. It is refused when nobody can be asked.
+- **Browser LAN grant:** it is cleared once the main frame goes to a host outside it. A public page reached from a granted device can no longer post back to it (decision 271 covered HTTP 3xx only).
+- **Console messages are caught natively** (onConsoleMessage) from the first line of loading. They are merged with the page script's log, so a startup error is no longer missing.
+- **Credentials on redirects:** a guarded redirect to another origin sends only neutral headers (no Authorization, Cookie or API-key header).
+- **Reads with your own headers never fall back:** with caller headers, or format raw / html, fetch_url never falls back to the outside renderer or Exa. It returns the origin's own status and body.
+- **MCP secrets:** an MCP server's `headers` go to the secure store like its token. Backups leave out `headers` and `bridgeSecret`; a test checks that a backup zip holds no configured secret string.
+
+274. **PC tools and the shell guard (field reviews: sysadmin, web developer, security; built by a helper).**
+- **pc_shell asks before destructive admin commands:**
+  - The line is split with the shell guard's lexer, unwrapping sudo, env, time, nohup and `sh -c`. It also reads what `ssh host "…"`, `powershell -Command`, `cmd /c` and `wsl` would run.
+  - reboot and poweroff, service stops, docker / kubectl / zfs deletes, dd and mkfs, `crontab -r`, `find -delete` and truncate now ask in Auto. `-EncodedCommand` always asks.
+  - The old no-ask list (git log --format, Format-Table…) still does not ask.
+  - The PC's preview of what a delete hits sees `sudo rm` and an rm after `&&`.
+- **pc_write:**
+  - It keeps the file's mode and owner (a 750 script came back 644, a 600 .env too).
+  - It keeps one `<file>.bak` unless `backup: false`.
+  - It writes a symlink's target and says so.
+- **New `pc_edit`:**
+  - Exact-text replacements like edit_file.
+  - `expect_sha256` from pc_read refuses a stale edit; a whole-file pc_read now ends with its sha256.
+  - The approval and the result show a short diff.
+- **pc_search:**
+  - It skips node_modules, .git, dist, build and similar folders unless `all: true`. It walks without the 2000-entry list cap.
+  - Files are read line by line up to 200 MB; files over 4 MB used to be skipped silently.
+  - It says what was cut or skipped, and "Nothing found in N files".
+  - New options: `regex` and `count_only`.
+- **pc_import of a repo** leaves out the same folders and names them.
+- **pc_job:** `lines` (80 by default).
+- **What the model is told about the PC:**
+  - The prompt no longer says a full-control PC reaches only the shared folders, and says hidden files need `--dotfiles`.
+  - pc_shell's description says stdin is closed (`sudo -n`) and that a Windows PC wants `powershell -NoProfile -Command`.
+  - A sudo password error gets a hint.
+- **pc-files.py version 5:** an older one is named, with "update it", where its answer lacks the new fields.
+- **The phone shell's guard asks before reading credentials and keys:**
+  - The GitHub token, gh's hosts.yml, ~/.git-credentials and private SSH keys, including via cd, globs and recursive tools on folders that hold them.
+  - `git credential` and `gh auth --show-token`.
+  - `ssh host …` and `ansible -a` payloads go through the same rules.
+- **Rebuildable folders:** `rm -rf` of node_modules, dist, build, .next, .cache, coverage, target and `__pycache__` no longer asks.
+- **Killed processes (exit 137):** the result explains Android's process limit and low memory, with fewer workers or the developer-options fix.

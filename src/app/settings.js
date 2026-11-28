@@ -927,12 +927,14 @@ $('#open-providers').onclick = openProviders;
 // ---------- usage history ----------
 function openUsageHistory() {
   const u = usageSummary(state.models, 30);
-  const money = (v) => (v >= 10 ? '$' + v.toFixed(0) : v >= 0.1 ? '$' + v.toFixed(2) : v > 0 ? '$' + v.toFixed(3) : '$0');
+  const dollars = (v) => (v >= 10 ? '$' + v.toFixed(0) : v >= 0.1 ? '$' + v.toFixed(2) : v > 0 ? '$' + v.toFixed(3) : '$0');
+  // a model with no known price is not $0: "price unknown", or "$1.20 + ?" when only part of it is priced (decision 275)
+  const money = (v, unpriced = false) => (unpriced ? (v > 0 ? dollars(v) + ' + ?' : 'price unknown') : dollars(v));
   const tiles = $('#uh-tiles');
   tiles.innerHTML = '';
   for (const [label, t] of [['Today', u.totals.today], ['7 days', u.totals.week], ['30 days', u.totals.month]]) {
     const d = el('div', 'uh-tile');
-    d.append(el('div', 'uh-label', label), el('div', 'uh-big', fmtTokens(t.in + t.out)), el('div', 'uh-sub', `${t.reqs} requests · ${money(t.value)}`));
+    d.append(el('div', 'uh-label', label), el('div', 'uh-big', fmtTokens(t.in + t.out)), el('div', 'uh-sub', `${t.reqs} requests · ${money(t.value, t.unpriced)}`));
     tiles.append(d);
   }
   const chart = $('#uh-chart');
@@ -959,7 +961,7 @@ function openUsageHistory() {
   for (const r of srcs) {
     const row = el('div', 'uh-row uh-src');
     row.style.setProperty('--share', ((r.in + r.out) / srcMax) * 100 + '%');
-    row.append(el('span', 'uh-model', r.name), el('span', 'uh-num', fmtTokens(r.in + r.out)), el('span', 'uh-num', `${r.reqs}×`), el('span', 'uh-num', money(r.value)));
+    row.append(el('span', 'uh-model', r.name), el('span', 'uh-num', fmtTokens(r.in + r.out)), el('span', 'uh-num', `${r.reqs}×`), el('span', 'uh-num', money(r.value, r.unpriced)));
     srcBox.append(row);
   }
   const chats = $('#uh-chats');
@@ -968,7 +970,7 @@ function openUsageHistory() {
   if (!spend.length) chats.append(el('p', 'hint pad', 'Per-chat numbers start counting from now.'));
   for (const r of spend) {
     const row = el('button', 'uh-row');
-    row.append(el('span', 'uh-model', state.convs.find((c) => c.id === r.id)?.title || 'Chat'), el('span', 'uh-num', fmtTokens(r.in + r.out)), el('span', 'uh-num', `${r.reqs}×`), el('span', 'uh-num', money(r.value)));
+    row.append(el('span', 'uh-model', state.convs.find((c) => c.id === r.id)?.title || 'Chat'), el('span', 'uh-num', fmtTokens(r.in + r.out)), el('span', 'uh-num', `${r.reqs}×`), el('span', 'uh-num', money(r.value, r.unpriced)));
     row.onclick = () => {
       openSheet('#usage-sheet', false);
       selectConv(r.id);
@@ -988,7 +990,7 @@ function openUsageHistory() {
   if (!u.models.length) tbl.append(el('p', 'hint pad', 'No usage recorded yet.'));
   for (const m of u.models) {
     const row = el('div', 'uh-row');
-    row.append(el('span', 'uh-model', modelName(m.model)), el('span', 'uh-num', `${fmtTokens(m.in)} in${m.cached ? ` (${fmtTokens(m.cached)} cached)` : ''}`), el('span', 'uh-num', `${fmtTokens(m.out)} out`), el('span', 'uh-num', `${m.reqs}×`), el('span', 'uh-num', money(m.value)));
+    row.append(el('span', 'uh-model', modelName(m.model)), el('span', 'uh-num', `${fmtTokens(m.in)} in${m.cached ? ` (${fmtTokens(m.cached)} cached)` : ''}`), el('span', 'uh-num', `${fmtTokens(m.out)} out`), el('span', 'uh-num', `${m.reqs}×`), el('span', 'uh-num', money(m.value, m.unpriced)));
     tbl.append(row);
   }
   openDrawer(false);

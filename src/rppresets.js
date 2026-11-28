@@ -130,6 +130,12 @@ export const PRESET_FIELD_HELP = {
 };
 const SAMPLER_RANGE = { temperature: [0, 2], max_tokens: [1, 200000], top_p: [0, 1], min_p: [0, 1], top_k: [0, 1000], frequency_penalty: [-2, 2], presence_penalty: [-2, 2], repetition_penalty: [0, 3] };
 const TEXT_FIELDS = ['rpMain', 'rpPhi', 'rpNote', 'rpPrefill', 'rpImpersonate'];
+/** What the user reads in the question (decision 270): "rpPhi, samplers" meant nothing to them. */
+const LABEL = { name: 'name', model: 'model', effort: 'reasoning effort', samplers: 'samplers (temperature, length…)', rpMain: 'main prompt', rpPhi: 'post-history instructions', rpNote: "author's note", rpNoteDepth: "author's note depth", rpNoteRole: "author's note role", rpPrefill: 'reply prefill', rpImpersonate: 'impersonate prompt', rpNames: 'names in front of messages' };
+export const fieldLabel = (k) => LABEL[k] || k;
+const labels = (ks) => ks.map(fieldLabel).join(', ');
+/** How a preset reaches a chat – said after a change, so the model can tell the user where to look. */
+const WHERE = ' A roleplay chat uses it when it is picked in that chat\'s settings (🎛 Roleplay preset), or when it is the default for roleplays; the change applies from the next reply.';
 
 /** A preset by name or id (exact id, then exact name, then a single name that starts with it) – or a list of candidates. */
 export function findPreset(list, q) {
@@ -251,8 +257,8 @@ export function planPresetChange(s, action, args = {}, { standard = {}, starters
     return {
       list,
       defaultId,
-      summary: `Make a roleplay preset “${p.name}”, a copy of ${fromName}${changed.length ? ` with ${[...new Set(changed)].join(', ')} changed` : ''}${args.make_default ? ', and make it the default for roleplays' : ''}?`,
-      result: `Made the preset “${p.name}” (${p.id})${args.make_default ? ' – the default for roleplays now' : ''}.`,
+      summary: `Make a roleplay preset “${p.name}”, a copy of ${fromName}${changed.length ? ` with ${labels([...new Set(changed)])} changed` : ''}${args.make_default ? ', and make it the default for roleplays' : ''}?`,
+      result: `Made the preset “${p.name}” (${p.id})${args.make_default ? ' – the default for roleplays now' : ''}.${WHERE}`,
     };
   }
   if (action === 'edit') {
@@ -267,8 +273,8 @@ export function planPresetChange(s, action, args = {}, { standard = {}, starters
     return {
       list,
       defaultId,
-      summary: `Change the roleplay preset “${found.name}”: ${[what.length ? what.join(', ') : '', def].filter(Boolean).join('; ')}?${what.some((k) => TEXT_FIELDS.includes(k)) ? `\n\n${what.filter((k) => TEXT_FIELDS.includes(k)).map((k) => `${k}: ${String(p[k] || '').slice(0, 300)}${String(p[k] || '').length > 300 ? '…' : ''}`).join('\n\n')}` : ''}`,
-      result: `Changed the preset “${p.name}”${what.length ? ` (${what.join(', ')})` : ''}${def ? ` and ${def.replace(/^make it/, 'made it').replace(/^stop it/, 'stopped it')}` : ''}.`,
+      summary: `Change the roleplay preset “${found.name}”: ${[what.length ? labels(what) : '', def].filter(Boolean).join('; ')}?${what.some((k) => TEXT_FIELDS.includes(k)) ? `\n\n${what.filter((k) => TEXT_FIELDS.includes(k)).map((k) => `${fieldLabel(k)}: ${String(p[k] || '').slice(0, 300)}${String(p[k] || '').length > 300 ? '…' : ''}`).join('\n\n')}` : ''}`,
+      result: `Changed the preset “${p.name}”${what.length ? ` (${what.join(', ')})` : ''}${def ? ` and ${def.replace(/^make it/, 'made it').replace(/^stop it/, 'stopped it')}` : ''}.${WHERE}`,
     };
   }
   if (action === 'delete') {

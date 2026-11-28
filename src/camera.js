@@ -72,14 +72,20 @@ export function videoAttachment(v, { hasLinux = true } = {}) {
 /**
  * The attachment for a file of any size put in the chat's folder (📎 › Attach a file or image on the phone, decisions 249, 262): no bytes, a
  * note the model reads instead – where it is, and for a video how to look at it.
+ * The note says only what is true (decision 275): the file is on the phone's disk (uploads/), not in the app's workspace,
+ * so "work with it in the shell" only when Linux is installed (hasLinux) and this chat has the shell tool (shellOn);
+ * run_python sees it only once a shell command has copied it in (files up to 32 MB – LIMITS.fileBytes in bridge.js).
  */
-export function folderFileAttachment(f, { hasLinux = true } = {}) {
+export function folderFileAttachment(f, { hasLinux = true, shellOn = hasLinux } = {}) {
   const video = /\.(mp4|mov|m4v|mkv|webm|3gp|avi)$/i.test(f.name);
+  const mirrored = f.size <= 32 * 1024 * 1024;
   const how = video
     ? 'To see it: ffprobe for its length, then ffmpeg to cut frames (e.g. one every few seconds, scaled to 768 px) or the audio, and look at the frames. Install ffmpeg first if it is missing (apk add ffmpeg, or apt-get install -y ffmpeg).'
-    : 'Work with it in the shell (it is too big to be read into the chat whole).';
-  const where = hasLinux
-    ? `It is in this chat's folder as uploads/${f.name} – in the Linux shell /workspace/uploads/${f.name}; Claude Code finds it in its working folder. ${how}`
-    : `It is saved in this chat's folder as uploads/${f.name}; working with it needs the built-in Linux, which is not set up yet.`;
+    : `Work with it in the shell (it is too big to be read into the chat whole).${mirrored ? ` After a shell command has run, a copy is also in the app's workspace as uploads/${f.name}, where run_python can open it.` : " run_python cannot open it (too big for the app's workspace)."}`;
+  const where = !hasLinux
+    ? `It is saved in this chat's folder as uploads/${f.name}; working with it needs the built-in Linux, which is not set up yet.`
+    : shellOn
+      ? `It is in this chat's folder as uploads/${f.name} – in the Linux shell /workspace/uploads/${f.name}; Claude Code finds it in its working folder. ${how}`
+      : `It is in this chat's folder on the phone as uploads/${f.name} – not in the app's workspace, so read_file and run_python cannot open it, and this chat has no shell tool (Settings › Tools & agent › “Run commands in the built-in Linux” turns it on). Claude Code finds it in its working folder.`;
   return { kind: 'file', name: f.name, size: f.size, lang: '', note: `${video ? 'video' : 'file'}, ${MB(f.size)}, in the chat's folder`, text: `[A ${video ? 'video' : 'file'} the user added from the phone: ${f.name}, ${MB(f.size)}. ${where}]`, truncated: false, video, inFolder: true };
 }

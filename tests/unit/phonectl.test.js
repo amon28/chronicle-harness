@@ -317,7 +317,7 @@ describe('android_intent share_file / open_file', () => {
     expect((await runIntentTool({ kind: 'share_file' }, s.ctx)).result).toMatch(/needs path/);
     expect((await runIntentTool({ kind: 'share_file', path: '../x' }, s.ctx)).result).toMatch(/needs path/);
     expect((await runIntentTool({ kind: 'open_file', path: 'nope.txt' }, s.ctx)).result).toMatch(/not in the workspace/);
-    expect((await runIntentTool({ kind: 'open_file', path: 'app.apk' }, s.ctx)).result).toMatch(/apps cannot be handed over/);
+    expect((await runIntentTool({ kind: 'open_file', path: 'app.apk' }, s.ctx)).result).toMatch(/an app cannot be installed or handed over from here. To install it, the user copies it to the phone's Download folder/);
     s.ctx.workspace.files['big.bin'] = { data: { byteLength: MAX_SHARE_BYTES + 1 } };
     expect((await runIntentTool({ kind: 'share_file', path: 'big.bin' }, s.ctx)).result).toMatch(/too big/);
     expect(s.asked).toEqual([]);

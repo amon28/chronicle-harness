@@ -59,15 +59,25 @@ function toolGroupsOn() {
   };
   return TOOL_GROUPS.filter(([k]) => has(k));
 }
+/**
+ * The chat's model cannot call tools (the on-device model, a custom endpoint that says so): the engine then sends
+ * none (capabilities.tools.supported === false, the same check as runCompletion), so the chip says that instead of
+ * "🛠 N tools" (decision 275).
+ */
+function modelLacksTools() {
+  const id = hooks.modelFor?.() ?? state.settings.model;
+  return state.models.find((x) => x.id === id)?.capabilities?.tools?.supported === false;
+}
 function updateToolsChip() {
   updateContextChip();
   const on = toolsOn();
   const n = on ? toolGroupsOn().length : 0;
+  const none = on && modelLacksTools();
   const b = $('#tools-btn');
-  b.classList.toggle('on', on);
-  b.textContent = on ? `🛠 ${n} tools` : '🛠 Tools off';
-  b.setAttribute('aria-label', on ? `Tools on: ${n} groups – tap to see or change` : 'Tools off – tap to see or change');
-  b.title = '';
+  b.classList.toggle('on', on && !none);
+  b.textContent = none ? '🛠 not with this model' : on ? `🛠 ${n} tools` : '🛠 Tools off';
+  b.setAttribute('aria-label', none ? 'Tools on, but this model cannot use them – tap to see or change' : on ? `Tools on: ${n} groups – tap to see or change` : 'Tools off – tap to see or change');
+  b.title = none ? 'This model cannot use tools: its replies are sent without them. Pick another model to use tools.' : '';
 }
 // the chip opens a small menu: the switch for this chat and what is on; nothing changes until you choose
 function renderToolsMenu() {
@@ -76,7 +86,7 @@ function renderToolsMenu() {
   const list = $('#tools-on-list');
   list.innerHTML = '';
   const groups = toolGroupsOn();
-  $('#tools-on-head').textContent = on ? `On in this chat (${groups.length})` : `Off in this chat – when on (${groups.length})`;
+  $('#tools-on-head').textContent = on && modelLacksTools() ? `On, but this model cannot use tools – another model gets these (${groups.length})` : on ? `On in this chat (${groups.length})` : `Off in this chat – when on (${groups.length})`;
   list.classList.toggle('off', !on);
   for (const [, label] of groups) list.append(el('li', null, label));
 }

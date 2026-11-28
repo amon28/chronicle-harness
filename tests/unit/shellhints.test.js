@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { NONINTERACTIVE_ENV, withNonInteractive, promptHint } from '../../src/shellhints.js';
+import { NONINTERACTIVE_ENV, withNonInteractive, promptHint, killedHint } from '../../src/shellhints.js';
+
+describe('killedHint (decision 274)', () => {
+  it('on exit 137 or "Killed" at the end of a failed command: Android, fewer workers, the developer option', () => {
+    const h = killedHint('building…\n', 137);
+    expect(h).toMatch(/^Hint: the command was killed from outside.*phantom process.*--maxsockets.*maxForks=1.*make -j1.*Disable child process restrictions/s);
+    expect(killedHint('npm ERR!\nsh: line 1: 4242 Killed                  node build.js\n', 1)).toMatch(/^Hint/);
+    expect(killedHint('Killed\n', 2)).toMatch(/^Hint/);
+  });
+  it('silent otherwise', () => {
+    expect(killedHint('all good\n', 0)).toBeNull();
+    expect(killedHint('Killed 3 stale processes\nDone\n', 0)).toBeNull();
+    expect(killedHint('error: not found\n', 1)).toBeNull();
+    expect(killedHint('', null)).toBeNull();
+  });
+  it('a password prompt names the full terminal for a one-time setup', () => expect(promptHint('alex@nas password: ')).toMatch(/ssh-copy-id.*full terminal/));
+});
 
 describe('promptHint', () => {
   it.each([

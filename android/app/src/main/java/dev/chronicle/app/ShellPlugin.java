@@ -379,9 +379,43 @@ public class ShellPlugin extends Plugin {
         return out;
     }
 
+    /**
+     * The name servers of the network the phone is on now, then public ones (decision 272): resolv.conf was written once
+     * at install as 1.1.1.1 / 8.8.8.8, so a router's names (nas.lan, homeassistant.local via the router, fritz.box)
+     * never resolved, and a network that blocks public DNS left the shell with none. Written at each shell start.
+     * A file the user replaced with their own (no "# chronicle" line) is left alone.
+     */
+    private void freshDns(File root) {
+        try {
+            File rc = new File(root, "etc/resolv.conf");
+            if (rc.exists() && !java.nio.file.Files.isSymbolicLink(rc.toPath())) {
+                String cur = new String(java.nio.file.Files.readAllBytes(rc.toPath()), StandardCharsets.UTF_8);
+                if (!cur.contains("# chronicle") && !cur.equals("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")) return;
+            }
+            StringBuilder sb = new StringBuilder("# chronicle: this network's name servers first, written at each shell start\n");
+            java.util.LinkedHashSet<String> ns = new java.util.LinkedHashSet<>();
+            String search = "";
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.Network net = cm == null ? null : cm.getActiveNetwork();
+            android.net.LinkProperties lp = net == null ? null : cm.getLinkProperties(net);
+            if (lp != null) {
+                for (java.net.InetAddress a : lp.getDnsServers()) if (a instanceof java.net.Inet4Address) ns.add(a.getHostAddress());
+                if (lp.getDomains() != null) search = lp.getDomains().trim();
+            }
+            int n = 0;
+            for (String a : ns) if (n++ < 2) sb.append("nameserver ").append(a).append('\n');
+            for (String a : new String[] {"1.1.1.1", "8.8.8.8"}) if (n++ < 3 && !ns.contains(a)) sb.append("nameserver ").append(a).append('\n');
+            if (!search.isEmpty()) sb.append("search ").append(search.replaceAll("[^A-Za-z0-9. -]", "")).append('\n');
+            sb.append("options timeout:2 attempts:2\n");
+            writeFresh(rc, sb.toString());
+        } catch (Exception ignored) {
+        }
+    }
+
     private Sh spawn(String id, String mountsSpec) throws Exception {
         File tmp = new File(getContext().getCacheDir(), "proot");
         new File(rootfs(), "workspace").mkdirs(); // the app-side bridge mirrors this chat's workspace here
+        freshDns(rootfs());
         List<String> tail = new ArrayList<>();
         for (String b : parseMounts(mountsSpec)) {
             tail.add("-b");

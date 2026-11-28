@@ -1,7 +1,7 @@
 // Files on my PC (decision 223): the real scripts/pc-files.py on a temporary folder, driven by the app's pc_* tools.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, existsSync, statSync, chmodSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,7 @@ vi.mock('../../src/sandbox.js', () => ({
   wsPut: (w, p, data) => ((w.files[p] = { data }), p),
 }));
 
-const { runPcTool, pcHealth, pcDefs, pcPrompt, parsePairing } = await import('../../src/pcfiles.js');
+const { runPcTool, pcHealth, pcDefs, pcPrompt, parsePairing, pcCall, DESTRUCTIVE, pcDanger, shortDiff } = await import('../../src/pcfiles.js');
 
 const SCRIPT = fileURLToPath(new URL('../../scripts/pc-files.py', import.meta.url));
 const SECRET = 'test-secret-123';
@@ -147,7 +147,7 @@ describe('Files on my PC: pc-files.py and the pc_* tools', () => {
     expect(a.out()).toContain('read and save');
   });
   it('the tools and the prompt name the computers; with two, the assistant picks one', async () => {
-    expect(pcDefs([ro]).map((d) => d.function.name)).toEqual(['pc_list', 'pc_search', 'pc_read', 'pc_import', 'pc_write']);
+    expect(pcDefs([ro]).map((d) => d.function.name)).toEqual(['pc_list', 'pc_search', 'pc_read', 'pc_import', 'pc_write', 'pc_edit']);
     expect(pcDefs([ro, rw])[0].function.parameters.properties.pc.enum).toEqual(['Laptop', 'Desk']);
     expect(pcPrompt([{ ...ro, folders: ['game'], write: false }], 'ask')).toMatch(/"Laptop" \(shares game; read-only\)/);
     const two = { settings: { pcFiles: [ro, rw] }, workspace: { files: {} }, phone: { mode: () => 'auto' } };
@@ -166,8 +166,8 @@ describe('full control, the QR code and the pairing link (decision 230)', () => 
   it('--full: it says so, reaches any file by absolute path (hidden ones too) and saves there', async () => {
     expect(await pcHealth(fullPc)).toMatchObject({ full: true, write: true });
     const c = ctx(fullPc, 'auto');
-    expect((await run('pc_read', { path: join(outside, 'private.txt') }, c)).result).toBe('    1\tnot shared');
-    expect((await run('pc_read', { path: join(root, 'game', '.env') }, c)).result).toBe('    1\tAPI_KEY=secret');
+    expect((await run('pc_read', { path: join(outside, 'private.txt') }, c)).result).toMatch(/^    1\tnot shared\n\[sha256 [0-9a-f]{12}\]$/);
+    expect((await run('pc_read', { path: join(root, 'game', '.env') }, c)).result).toMatch(/^    1\tAPI_KEY=secret\n\[sha256 /);
     const w = await run('pc_write', { path: join(outside, 'new', 'made.txt'), content: 'hello' }, c);
     expect(w.ok).toBe(true);
     expect(readFileSync(join(outside, 'new', 'made.txt'), 'utf8')).toBe('hello');
@@ -223,7 +223,7 @@ describe("the agent's report: jobs, depth, line numbers, append, and what a kill
     const r = await run('pc_shell', { command: 'echo started; sleep 2; echo finished' }, c);
     expect(r.ok).toBe(true);
     const job = /job (j[0-9a-f]+)/.exec(r.result)[1];
-    expect(r.result).toMatch(/^Still running after .* – job j[0-9a-f]+\. It keeps going; follow it with pc_job/);
+    expect(r.result).toMatch(/^Still running after .* – job j[0-9a-f]+, stopped by itself at the 10 min timeout \(10 min from now\)\. It keeps going; follow it with pc_job/);
     expect(r.result).toContain('started');
     const done = await run('pc_job', { job, action: 'wait', wait_s: 10 }, c);
     expect(done.ok).toBe(true);
@@ -234,6 +234,54 @@ describe("the agent's report: jobs, depth, line numbers, append, and what a kill
     expect(killed.result).toMatch(/^Killed\./);
     expect(killed.ok).toBe(false);
   }, 30000);
+  it('the timeout holds with nobody asking; the same job id sent twice runs once; pc_job list finds a lost id (decision 269)', async () => {
+    globalThis.__ocmPcWait = 0.3;
+    const c = ctx(box, 'auto');
+    const r = await run('pc_shell', { command: `sleep 30; echo late >> ${join(dir, 'late.txt')}`, timeout_s: 1 }, c);
+    const job = /job (j[0-9a-f]+)/.exec(r.result)[1];
+    expect(r.result).toMatch(/stopped by itself at the 1 s timeout/);
+    await new Promise((ok) => setTimeout(ok, 2000)); // no pc_job call in between: the PC ends it on its own
+    const l = await run('pc_job', { action: 'list' }, c);
+    expect(l.result).toMatch(new RegExp(`${job} – stopped at its 1 s timeout – sleep 30`));
+    const w = await run('pc_job', { job, action: 'read' }, c);
+    expect(w.result).toMatch(new RegExp(`^Stopped: job ${job} ran past the 1 s timeout and was ended`));
+    expect(w.result).toMatch(/bigger timeout_s/);
+    // a request sent again (its answer was lost on the way) is the same job – the command ran once
+    const body = { command: `echo once >> ${join(dir, 'once.txt')}`, cwd: dir, timeout: 60, wait: 2, job: 'jabcdef0123' };
+    const a = await pcCall(box, '/exec', body);
+    const b = await pcCall(box, '/exec', body);
+    expect([a.job, b.job, b.again]).toEqual(['jabcdef0123', 'jabcdef0123', true]);
+    expect(readFileSync(join(dir, 'once.txt'), 'utf8')).toBe('once\n');
+    await expect(pcCall(box, '/exec', { ...body, command: 'echo other' })).rejects.toThrow(/already used by another command/);
+  }, 30000);
+  it('an answer that never came names the job, and says not to run it again', async () => {
+    const was = globalThis.__ocmPcHttp;
+    globalThis.__ocmPcHttp = async () => {
+      throw new Error('request timed out');
+    };
+    try {
+      await expect(run('pc_shell', { command: 'make all' }, ctx(box, 'auto'))).rejects.toThrow(/as job j[0-9a-f]{10}: pc_job \(job "j[0-9a-f]{10}", action read\) shows it.*do not run it again/);
+    } finally {
+      globalThis.__ocmPcHttp = was;
+    }
+  });
+  it('pc_read reaches past the first 4 MB: line by line, tail_lines for the end, offset for the middle (decision 269)', async () => {
+    const c = ctx(box, 'auto');
+    const big = join(dir, 'big.txt');
+    // about 9 MB: three parts of 4 MB
+    writeFileSync(big, Array.from({ length: 300000 }, (_, i) => `entry ${String(i + 1).padStart(6, '0')} ${'x'.repeat(20)}`).join('\n') + '\n');
+    const deep = await run('pc_read', { path: big, start_line: 290000, max_lines: 2 }, c);
+    expect(deep.result).toMatch(/^290000\tentry 290000 x+\n290001\tentry 290001 x+\n… \[more after line 290001 of 300000 – pc_read with start_line 290002\]$/);
+    const end = await run('pc_read', { path: big, tail_lines: 2 }, c);
+    expect(end.result).toMatch(/^\[the last 2 lines of .*big\.txt \(.*; line numbers are not counted this far into the file\)\]\nentry 299999 x+\nentry 300000 x+$/);
+    const mid = await run('pc_read', { path: big, offset: 5000000, max_lines: 1 }, c);
+    expect(mid.result).toMatch(/^\[.*big\.txt from byte \d+ of \d+; line numbers are not counted from an offset\]\nentry \d{6} x+\n… \[more after byte \d+ of \d+ – pc_read with offset \d+\]$/);
+    const at = Number(/offset (\d+)\]$/.exec(mid.result)[1]);
+    const next = await run('pc_read', { path: big, offset: at, max_lines: 1 }, c);
+    expect(Number(/entry (\d+)/.exec(next.result)[1])).toBe(Number(/entry (\d+)/.exec(mid.result)[1]) + 1);
+    // a line that is not there says how many there are
+    expect((await run('pc_read', { path: join(dir, 'lines.txt'), start_line: 99 }, c)).result).toMatch(/has no line 99 – it has 3\d lines/);
+  }, 30000);
   it('pc_list takes a depth and a max; pc_read numbers the lines and reads from start_line; pc_write can append', async () => {
     const c = ctx(box, 'auto');
     const one = await run('pc_list', { path: dir, depth: 2 }, c);
@@ -243,7 +291,7 @@ describe("the agent's report: jobs, depth, line numbers, append, and what a kill
     expect(all.result).toContain('deep.txt');
     expect((await run('pc_list', { path: dir, recursive: true, max: 2 }, c)).result).toMatch(/cut at 2 entries/);
     const r = await run('pc_read', { path: join(dir, 'lines.txt'), start_line: 10, max_lines: 3 }, c);
-    expect(r.result).toBe('   10\tline 10\n   11\tline 11\n   12\tline 12\n… [more after line 12 of 30 – pc_read with start_line 13]');
+    expect(r.result).toMatch(/^   10\tline 10\n   11\tline 11\n   12\tline 12\n… \[more after line 12 of 30 – pc_read with start_line 13\]\n\[sha256 [0-9a-f]{12}\]$/);
     await run('pc_write', { path: join(dir, 'lines.txt'), content: '\nline 31', append: true }, c);
     expect(readFileSync(join(dir, 'lines.txt'), 'utf8').endsWith('line 30\nline 31')).toBe(true);
   });
@@ -292,4 +340,279 @@ describe("the agent's report: jobs, depth, line numbers, append, and what a kill
     expect(ps[0].signalCode).toBe('SIGTERM');
     expect(ps[1].exitCode).toBeNull();
   });
+});
+
+describe('a kill or delete is the command, not a word in it (decision 270)', () => {
+  it('asks for these', () => {
+    for (const c of ['rm -rf x', '  del a.txt', 'taskkill /PID 1', 'Get-Process x | Stop-Process', 'sudo kill 12', 'ls; rm a', 'find . | xargs rm', 'find . | xargs -0 rm', 'shutdown /s', 'format c:', 'Remove-Item a', '(kill 1)', 'ri x', 'a && del b']) expect([c, DESTRUCTIVE.test(c)]).toEqual([c, true]);
+  });
+  it('not for these', () => {
+    for (const c of ['git log --format=%H', 'Get-Process | Format-Table', 'echo kill', 'grep shutdown log.txt', 'npm run format', 'ls -la', 'kill-port.sh 3000', 'type rm.txt']) expect([c, DESTRUCTIVE.test(c)]).toEqual([c, false]);
+  });
+});
+
+describe("a Windows command's output in the console's code page (decision 270)", () => {
+  it('is read as UTF-8 when it is, else in the OEM code page; a character cut at the start of a tail is dropped', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const script = fileURLToPath(new URL('../../scripts/pc-files.py', import.meta.url));
+    const py = `
+src=open(${JSON.stringify(script)}, encoding='utf-8').read()
+g={'IS_WIN':False}
+exec(src[src.index('def _oem():'):src.index('def _tail(path):')],g)
+out=[g['decode_out']('Größe'.encode()), g['decode_out'](b'\\x9f\\xc3\\xb6x', True)]
+g['IS_WIN']=True; g['_oem']=lambda: 'cp850'
+out.append(g['decode_out']('Größe'.encode('cp850')))
+print('|'.join(out))`;
+    expect(execFileSync('python3', ['-c', py], { encoding: 'utf8' }).trim()).toBe('Größe|öx|Größe');
+  });
+});
+
+describe('pc_shell asks before destructive admin commands, wherever they stand in the line (decision 274)', () => {
+  it("asks for the reviewer's list", () => {
+    const yes = ['sudo reboot', 'sudo poweroff', 'systemctl stop nginx', 'sudo systemctl disable --now sshd', 'docker rm -f web', 'docker system prune -af --volumes', 'docker volume rm data', 'docker compose down -v', 'dd if=/dev/zero of=/dev/sda', 'sudo mkfs.ext4 /dev/sdb1', 'zfs destroy tank/data', 'sudo -u www rm -rf /var/www', 'bash -c "rm -rf ~/x"', 'ssh nas "rm -rf /volume1/backup"', 'find /srv -name "*.log" -delete', 'crontab -r', 'truncate -s 0 app.log', 'time rm -rf x', 'powershell -Command "Remove-Item C:\\\\data -Recurse -Force"', 'powershell -c "Stop-Computer -Force"', 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem | ForEach-Object { Remove-Item $_ }"', 'pwsh -EncodedCommand ZQBjAGgAbwA=', 'cmd /c del /q C:\\\\x', 'cmd.exe /C "rd /s /q build"', 'wsl rm -rf /mnt/c/x', 'kubectl delete ns prod', 'git reset --hard', 'sc stop wuauserv', 'echo y | sudo tee /dev/null && sudo shutdown now', 'nohup rm -rf old &'];
+    for (const c of yes) expect([c, !!pcDanger(c)]).toEqual([c, true]);
+    expect(pcDanger('systemctl stop nginx')).toMatch(/systemctl stop/);
+    expect(pcDanger('ssh nas "rm -rf /volume1/backup"')).toMatch(/on nas/);
+    expect(pcDanger('pwsh -EncodedCommand ZQBjAGgAbwA=')).toMatch(/cannot be read/);
+  });
+  it('still not for words that only look like it', () => {
+    const no = ['git log --format=%H', 'Get-Process | Format-Table', 'echo kill', 'grep shutdown log.txt', 'npm run format', 'systemctl status nginx', 'systemctl restart nginx', 'docker ps -a', 'docker logs web', 'docker compose up -d', 'fdisk -l', 'ssh nas uptime', 'ssh nas', 'powershell -NoProfile -Command "Get-ChildItem C:\\\\data"', 'cmd /c dir', 'crontab -l', 'zfs list', 'find . -name "*.py"', 'kubectl get pods', 'sudo apt-get update', 'echo "rm -rf /"'];
+    for (const c of no) expect([c, pcDanger(c)]).toEqual([c, '']);
+  });
+  it('/preview sees a delete behind sudo, after && and ;, and inside bash -c', async () => {
+    const f = await start(['--full', '--no-qr']);
+    const box = { id: 'p', name: 'Box', url: f.url, secret: SECRET, full: true, os: 'Linux' };
+    const dir = mkdtempSync(join(tmpdir(), 'pcf-prev-'));
+    writeFileSync(join(dir, 'a.log'), 'a');
+    writeFileSync(join(dir, 'b.log'), 'b');
+    for (const command of ['sudo rm -f a.log b.log', 'ls && rm *.log', 'cd . ; rm -f a.log b.log 2>/dev/null', 'bash -c "rm *.log"', 'time rm *.log']) {
+      const pv = await pcCall(box, '/preview', { command, cwd: dir });
+      expect([command, pv.files.map((x) => x.path.split('/').pop()).sort()]).toEqual([command, ['a.log', 'b.log']]);
+    }
+    expect((await pcCall(box, '/preview', { command: 'echo rm a.log', cwd: dir })).files).toEqual([]);
+    // and so sudo rm of two files is stopped with the list, like rm of two
+    const stop = await run('pc_shell', { command: 'sudo -n rm a.log b.log', cwd: dir }, ctx(box, 'auto', { ask: async (q, o) => o[0] }));
+    expect(stop.result).toMatch(/^Not run: this would hit 2 things/);
+  }, 20000);
+  it('sudo that wants a password says how to do it; Windows says cmd and powershell -Command', async () => {
+    const f = await start(['--full', '--no-qr']);
+    const box = { id: 'p', name: 'Box', url: f.url, secret: SECRET, full: true, os: 'Linux' };
+    const r = await run('pc_shell', { command: 'echo "sudo: a terminal is required to read the password; either use the -S option" >&2; exit 1' }, ctx(box, 'auto'));
+    expect(r.result).toMatch(/Hint: sudo wanted a password.*sudo -n.*NOPASSWD/s);
+    expect((await run('pc_shell', { command: 'echo fine' }, ctx(box, 'auto'))).result).not.toMatch(/Hint/);
+    const d = pcDefs([{ ...box, os: 'Windows 11' }]).find((x) => x.function.name === 'pc_shell').function.description;
+    expect(d).toMatch(/stdin is closed.*sudo -n/);
+    expect(d).toMatch(/Windows runs cmd: for PowerShell use powershell -NoProfile -Command/);
+    expect(pcDefs([box]).find((x) => x.function.name === 'pc_shell').function.description).not.toMatch(/Windows runs cmd/);
+  }, 20000);
+});
+
+describe('the prompt says what a computer reaches (decision 274)', () => {
+  it('full control: any absolute path, no "only the folders shown"; shared: only those, hidden files need --dotfiles', () => {
+    const full = pcPrompt([{ name: 'Box', full: true, os: 'Linux' }], 'auto');
+    expect(full).toMatch(/any file by absolute path/);
+    expect(full).not.toMatch(/only the shared folders|Only the folders shown/);
+    const shared = pcPrompt([{ name: 'Laptop', folders: ['game'], write: true }], 'ask');
+    expect(shared).toMatch(/only the shared folders are reachable/);
+    expect(shared).toMatch(/\.github, \.gitignore, \.env.*--dotfiles/);
+    const both = pcPrompt([{ name: 'Laptop', folders: ['game'] }, { name: 'Box', full: true }], 'ask');
+    expect(both).toMatch(/On "Laptop" only the shared folders.*A full-control computer reaches any file/);
+  });
+});
+
+describe('pc_write keeps mode, owner and a .bak; a link is written through (decision 274)', () => {
+  let pc;
+  let share;
+  beforeAll(async () => {
+    share = mkdtempSync(join(tmpdir(), 'pcf-keep-'));
+    writeFileSync(join(share, 'run.sh'), '#!/bin/sh\necho one\n');
+    chmodSync(join(share, 'run.sh'), 0o750);
+    writeFileSync(join(share, 'secrets.env'), 'A=1\n');
+    chmodSync(join(share, 'secrets.env'), 0o600);
+    writeFileSync(join(share, 'real.txt'), 'real\n');
+    symlinkSync(join(share, 'real.txt'), join(share, 'link.txt'));
+    const s = await start(['--write', `keep=${share}`]);
+    pc = { id: 'k', name: 'Desk', url: s.url, secret: SECRET, write: true };
+  }, 20000);
+  it('a 750 script and a 600 file keep their mode; the version before is kept as <file>.bak, once', async () => {
+    const a = await run('pc_write', { path: 'keep/run.sh', content: '#!/bin/sh\necho two\n' }, ctx(pc));
+    expect(a.ok).toBe(true);
+    expect(statSync(join(share, 'run.sh')).mode & 0o777).toBe(0o750);
+    expect(readFileSync(join(share, 'run.sh.bak'), 'utf8')).toBe('#!/bin/sh\necho one\n');
+    expect(a.result).toMatch(/kept as keep\/run\.sh\.bak \(one \.bak, replaced the next time\)/);
+    await run('pc_write', { path: 'keep/run.sh', content: '#!/bin/sh\necho three\n' }, ctx(pc));
+    expect(readFileSync(join(share, 'run.sh.bak'), 'utf8')).toBe('#!/bin/sh\necho two\n');
+    await run('pc_write', { path: 'keep/secrets.env', content: 'A=2\n' }, ctx(pc));
+    expect(statSync(join(share, 'secrets.env')).mode & 0o777).toBe(0o600);
+    expect(statSync(join(share, 'secrets.env')).uid).toBe(statSync(join(share, 'secrets.env.bak')).uid);
+  });
+  it('backup: false keeps none; a new file has none to keep', async () => {
+    writeFileSync(join(share, 'nobak.txt'), 'x');
+    const r = await run('pc_write', { path: 'keep/nobak.txt', content: 'y', backup: false }, ctx(pc));
+    expect(r.result).not.toMatch(/\.bak/);
+    expect(existsSync(join(share, 'nobak.txt.bak'))).toBe(false);
+    const n = await run('pc_write', { path: 'keep/fresh.txt', content: 'new' }, ctx(pc));
+    expect(n.result).toBe('Saved keep/fresh.txt on Desk (1 KB).');
+  });
+  it('a link is written through: the file it points to changes, the link stays a link', async () => {
+    const r = await run('pc_write', { path: 'keep/link.txt', content: 'through\n' }, ctx(pc));
+    expect(r.ok).toBe(true);
+    expect(lstatSync(join(share, 'link.txt')).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(share, 'real.txt'), 'utf8')).toBe('through\n');
+    expect(r.result).toMatch(/keep\/link\.txt is a link: the file it points to \(keep\/real\.txt\) was written/);
+  });
+  it('an older pc-files.py (no backup field) is named as one to update', async () => {
+    const was = globalThis.__ocmPcHttp;
+    globalThis.__ocmPcHttp = async (url, o) => {
+      const r = await fetch(url, { method: o.method, headers: o.headers, body: o.body });
+      let body = await r.text();
+      if (url.endsWith('/write')) body = JSON.stringify({ size: JSON.parse(body).size });
+      return { status: r.status, headers: {}, body };
+    };
+    try {
+      const r = await run('pc_write', { path: 'keep/run.sh', content: 'old\n' }, ctx(pc));
+      expect(r.result).toMatch(/older than version 5 – update it.*no \.bak/);
+    } finally {
+      globalThis.__ocmPcHttp = was;
+    }
+  });
+});
+
+describe('pc_edit: exact-text edits on the PC (decision 274)', () => {
+  let pc;
+  let share;
+  beforeAll(async () => {
+    share = mkdtempSync(join(tmpdir(), 'pcf-edit-'));
+    writeFileSync(join(share, 'app.py'), 'def greet():\n    print("hi Alex")\n\ndef bye():\n    print("bye")\n    print("bye")\n');
+    chmodSync(join(share, 'app.py'), 0o750);
+    writeFileSync(join(share, 'latin.txt'), Buffer.from([0x47, 0x72, 0xf6, 0xdf, 0x65, 0x0a]));
+    const s = await start(['--write', `code=${share}`]);
+    pc = { id: 'e', name: 'Desk', url: s.url, secret: SECRET, write: true };
+  }, 20000);
+  it('replaces exactly once, keeps the mode and a .bak, shows the diff and the new sha256', async () => {
+    const r = await run('pc_edit', { path: 'code/app.py', old_text: 'print("hi Alex")', new_text: 'print("hello Alex")' }, ctx(pc));
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(share, 'app.py'), 'utf8')).toContain('print("hello Alex")');
+    expect(statSync(join(share, 'app.py')).mode & 0o777).toBe(0o750);
+    expect(readFileSync(join(share, 'app.py.bak'), 'utf8')).toContain('print("hi Alex")');
+    expect(r.result).toMatch(/^Edited code\/app\.py on Desk: 1 change\. The version before is kept as code\/app\.py\.bak/);
+    expect(r.result).toMatch(/--- code\/app\.py\n\+\+\+ code\/app\.py\n@@ line 1 @@\n def greet\(\):\n-    print\("hi Alex"\)\n\+    print\("hello Alex"\)\n/);
+    expect(r.result).toMatch(/\n\[sha256 [0-9a-f]{12}\]$/);
+  });
+  it('not unique, not found: refused, nothing changed; replace_all changes every one', async () => {
+    const before = readFileSync(join(share, 'app.py'), 'utf8');
+    await expect(run('pc_edit', { path: 'code/app.py', old_text: 'print("bye")', new_text: 'pass' }, ctx(pc))).rejects.toThrow(/appears 2 times/);
+    await expect(run('pc_edit', { path: 'code/app.py', old_text: 'nope', new_text: 'x' }, ctx(pc))).rejects.toThrow(/was not found/);
+    expect(readFileSync(join(share, 'app.py'), 'utf8')).toBe(before);
+    const r = await run('pc_edit', { path: 'code/app.py', edits: [{ old_text: 'print("bye")', new_text: 'print("later")', replace_all: true }] }, ctx(pc));
+    expect(r.result).toMatch(/: 2 changes\./);
+    expect(readFileSync(join(share, 'app.py'), 'utf8')).not.toContain('bye")');
+  });
+  it('expect_sha256 from pc_read: a file changed since is refused', async () => {
+    const read = await run('pc_read', { path: 'code/app.py' }, ctx(pc));
+    const sha = /\[sha256 ([0-9a-f]{12})\]$/.exec(read.result)[1];
+    const ok = await run('pc_edit', { path: 'code/app.py', old_text: 'def greet', new_text: 'def greet_alex', expect_sha256: sha }, ctx(pc));
+    expect(ok.ok).toBe(true);
+    // the sha256 it read is now old: the edit after a change by someone else is refused
+    const stale = await run('pc_edit', { path: 'code/app.py', old_text: 'def bye', new_text: 'def farewell', expect_sha256: sha }, ctx(pc));
+    expect(stale.ok).toBe(false);
+    expect(stale.result).toMatch(/changed on Desk since you read it.*nothing was changed/);
+    expect(readFileSync(join(share, 'app.py'), 'utf8')).toContain('def bye');
+    const next = /\[sha256 ([0-9a-f]{12})\]$/.exec(ok.result)[1];
+    expect((await run('pc_edit', { path: 'code/app.py', old_text: 'def bye', new_text: 'def farewell', expect_sha256: next }, ctx(pc))).ok).toBe(true);
+  });
+  it('review mode asks with the diff; no means nothing changed; read-only chat and PC refuse; other encodings are left alone', async () => {
+    const asked = [];
+    const no = await run('pc_edit', { path: 'code/app.py', old_text: 'def farewell', new_text: 'def bye' }, ctx(pc, 'ask', { ask: async (q, o) => (asked.push(q), o[1]) }));
+    expect(no.ok).toBe(false);
+    expect(asked[0]).toMatch(/^Change code\/app\.py on Desk\?\n\n--- code\/app\.py\n.*\n-def farewell\(\):\n\+def bye\(\):/s);
+    expect(readFileSync(join(share, 'app.py'), 'utf8')).toContain('def farewell');
+    expect((await run('pc_edit', { path: 'code/app.py', old_text: 'def farewell', new_text: 'def bye' }, ctx(pc, 'readonly'))).result).toMatch(/read-only/);
+    expect((await run('pc_edit', { path: 'code/app.py', old_text: 'def farewell', new_text: 'def bye' }, ctx({ ...pc, write: false }))).result).toMatch(/--write/);
+    await expect(run('pc_edit', { path: 'code/latin.txt', old_text: 'Gr', new_text: 'gr' }, ctx(pc))).rejects.toThrow(/not UTF-8/);
+    await expect(run('pc_edit', { path: 'code/missing.txt', old_text: 'a', new_text: 'b' }, ctx(pc))).rejects.toThrow(/pc_write makes a new file/);
+  });
+  it('the diff stays short around the change in a long file', () => {
+    const a = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join('\n');
+    const b = a.replace('line 2500', 'LINE 2500');
+    const d = shortDiff(a, b, 'f.txt');
+    expect(d).toBe('--- f.txt\n+++ f.txt\n@@ line 2499 @@\n line 2498\n line 2499\n-line 2500\n+LINE 2500\n line 2501\n line 2502');
+  });
+});
+
+describe('pc_search and pc_import with a real repo: node_modules, big files, what was not searched (decision 274)', () => {
+  let pc;
+  let repo;
+  beforeAll(async () => {
+    repo = mkdtempSync(join(tmpdir(), 'pcf-repo-'));
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    writeFileSync(join(repo, 'src', 'main.js'), 'export const NEEDLE_274 = 1;\n');
+    // 400 packages of 6 entries each: more than the 2000 entries the old walk stopped at, before src was reached
+    for (let i = 0; i < 400; i++) {
+      mkdirSync(join(repo, 'node_modules', `pkg${i}`, 'lib'), { recursive: true });
+      for (const n of ['a.js', 'b.js', 'c.js', 'd.js']) writeFileSync(join(repo, 'node_modules', `pkg${i}`, 'lib', n), 'x\n');
+    }
+    writeFileSync(join(repo, 'node_modules', 'pkg7', 'lib', 'a.js'), 'NEEDLE_274 in a package\n');
+    mkdirSync(join(repo, 'dist'));
+    writeFileSync(join(repo, 'dist', 'bundle.js'), 'NEEDLE_274 built\n');
+    // a 5 MB log with the match at its very end (it was skipped without a word above 4 MB)
+    writeFileSync(join(repo, 'big.log'), 'filler line\n'.repeat(450000) + 'the NEEDLE_274 at the end\n');
+    const s = await start([`repo=${repo}`]);
+    pc = { id: 'r', name: 'Laptop', url: s.url, secret: SECRET };
+  }, 60000);
+  it('finds it in src and in a big file, and says which folders were left out', async () => {
+    const r = await run('pc_search', { text: 'needle_274' }, ctx(pc));
+    expect(r.result).toContain('repo/src/main.js:1: export const NEEDLE_274 = 1;');
+    expect(r.result).toContain('repo/big.log:450001: the NEEDLE_274 at the end');
+    expect(r.result).not.toContain('node_modules/pkg7');
+    expect(r.result).toMatch(/\(left out: repo\/dist, repo\/node_modules – folders a build or an install makes; all: true searches them too\)/);
+  }, 30000);
+  it('all: true searches them too; count_only counts; regex works; nothing found says how much was searched', async () => {
+    const all = await run('pc_search', { text: 'needle_274', all: true }, ctx(pc));
+    expect(all.result).toContain('repo/node_modules/pkg7/lib/a.js:1: NEEDLE_274 in a package');
+    expect(all.result).toContain('repo/dist/bundle.js:1');
+    const n = await run('pc_search', { text: 'needle_274', count_only: true, path: 'repo/src' }, ctx(pc));
+    expect(n.result).toBe('repo/src/main.js: 1\n1 matching line in 1 file');
+    const rx = await run('pc_search', { text: 'NEEDLE_\\d+ =', regex: true }, ctx(pc));
+    expect(rx.result.split('\n')[0]).toBe('repo/src/main.js:1: export const NEEDLE_274 = 1;');
+    const none = await run('pc_search', { text: 'not-there-at-all', path: 'repo/src' }, ctx(pc));
+    expect(none.result).toBe('Nothing found in 1 file.');
+    await expect(run('pc_search', { text: '([', regex: true }, ctx(pc))).rejects.toThrow(/not a valid regular expression/);
+  }, 30000);
+  it('an older pc-files.py (no skipped field) is named as one to update', async () => {
+    const was = globalThis.__ocmPcHttp;
+    globalThis.__ocmPcHttp = async () => ({ status: 200, headers: {}, body: JSON.stringify({ matches: [], cut: false }) });
+    try {
+      expect((await run('pc_search', { text: 'x' }, ctx(pc))).result).toMatch(/^Nothing found\.\n\(pc-files\.py on Laptop is older than version 5 – update it.*skips files over 4 MB/s);
+    } finally {
+      globalThis.__ocmPcHttp = was;
+    }
+  });
+  it('pc_import of the repo root copies src and says what it left out', async () => {
+    const c = ctx(pc);
+    const r = await run('pc_import', { path: 'repo' }, c);
+    expect(r.ok).toBe(true);
+    expect(Object.keys(c.workspace.files).sort()).toEqual(['repo/big.log', 'repo/src/main.js']);
+    expect(r.result).toMatch(/Left out \(made again by a build or an install\): repo\/dist, repo\/node_modules – all: true/);
+  }, 30000);
+});
+
+describe('pc_job shows the last lines (decision 274)', () => {
+  afterAll(() => delete globalThis.__ocmPcWait);
+  it('80 by default with how many were left out; lines: 0 shows all', async () => {
+    const f = await start(['--full', '--no-qr']);
+    const box = { id: 'j', name: 'Box', url: f.url, secret: SECRET, full: true, os: 'Linux' };
+    globalThis.__ocmPcWait = 0.2;
+    const c = ctx(box, 'auto');
+    const r = await run('pc_shell', { command: 'sleep 0.5; for i in $(seq 1 200); do echo "row $i"; done' }, c);
+    const job = /job (j[0-9a-f]+)/.exec(r.result)[1];
+    const w = await run('pc_job', { job, action: 'wait', wait_s: 10 }, c);
+    expect(w.result).toMatch(/^Exit code 0\. \(in .*\)\n… \(120 earlier lines left out – lines: 0 shows all\)\nrow 121\n/);
+    expect(w.result.trim().endsWith('row 200')).toBe(true);
+    expect(w.result).not.toContain('row 120\n');
+    const some = await run('pc_job', { job, action: 'read', lines: 3 }, c);
+    expect(some.result).toMatch(/\(197 earlier lines left out.*\)\nrow 198\nrow 199\nrow 200/);
+    const all = await run('pc_job', { job, action: 'read', lines: 0 }, c);
+    expect(all.result).toContain('row 1\nrow 2\n');
+  }, 30000);
 });

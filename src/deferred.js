@@ -7,14 +7,27 @@ export const DEFER_CHARS = 8000; // above this many characters of extra tool def
 export const DEFER_COUNT = 12; // …or above this many extra tools
 
 const nameOf = (d) => d.function?.name || '';
-const summary = (d) => String(d.function?.description || '').replace(/^\[[^\]]*\]\s*/, '').split(/(?<=[.!?])\s/)[0].replace(/\s+/g, ' ').slice(0, 110);
+// the first sentence, cut at a word with "…" when long (decision 270: cut in the middle of a word at 110 characters, and
+// a first sentence like "Use it once." said nothing – then the next one is added)
+const summary = (d) => {
+  const parts = String(d.function?.description || '').replace(/^\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s/);
+  let t = parts[0] || '';
+  if (t.length < 40 && parts[1]) t += ' ' + parts[1];
+  if (t.length <= 140) return t;
+  const cut = t.slice(0, 140);
+  return cut.slice(0, Math.max(cut.lastIndexOf(' '), 100)).replace(/[,;:–-]+$/, '') + '…';
+};
 
 /**
  * Built-in tools a chat seldom needs (decision 175): sent as a name and a line in load_tools until the model loads
  * them – about 9K tokens off every request. Files, shell, web, browser, Python, the phone folder, memory and the
  * like stay loaded. A direct call of one still works and loads it for the rest of the chat.
+ * roleplay_presets (2.8K characters) was the one creator tool sent in every chat with the creator group: it waits
+ * here too now, like the persona tools beside it – and with it the creator guidance (decision 275). search_chats /
+ * read_chat stay loaded: the model has to think of them unasked ("as we said last week"), and repo_map is a coding
+ * chat's first look at a project.
  */
-export const ON_DEMAND = new Set(['screenshot_page', 'doctor', 'deep_research', 'claude_code', 'goal', 'schedule_task', 'ralph_loop', 'reload_tools', 'edit_persona', 'edit_lorebook', 'list_personas', 'read_persona', 'save_character', 'save_lorebook', 'save_persona', 'shortcuts', 'manage_mcp', 'saved_tools', 'manage_mod', 'read_lorebook', 'android_intent', 'calendar', 'contacts', 'location', 'places', 'phone_status', 'phone_control', 'take_photo', 'save_skill', 'save_tool']);
+export const ON_DEMAND = new Set(['screenshot_page', 'roleplay_presets', 'doctor', 'deep_research', 'claude_code', 'goal', 'schedule_task', 'ralph_loop', 'reload_tools', 'edit_persona', 'edit_lorebook', 'list_personas', 'read_persona', 'save_character', 'save_lorebook', 'save_persona', 'shortcuts', 'manage_mcp', 'saved_tools', 'manage_mod', 'read_lorebook', 'android_intent', 'calendar', 'contacts', 'location', 'places', 'phone_status', 'phone_control', 'take_photo', 'save_skill', 'save_tool', 'local_network']);
 
 /**
  * A small model's lighter tool set (decision 201): fewer tools make small models call the right one more often and
@@ -47,13 +60,42 @@ export function splitDeferred(extra, loaded = []) {
   return { active: list.filter((d) => keep.has(nameOf(d))), deferred: list.filter((d) => !keep.has(nameOf(d))) };
 }
 
+/**
+ * The list in load_tools, within budget (decision 269): the app's own tools first, each with its line; then the rest
+ * with lines while they fit, by name only past that, and "… and N more" at the very end – never a list cut off in the
+ * middle of a name, with the built-ins (calendar, claude_code…) lost behind a hundred MCP tools.
+ */
+export function deferredList(deferred, budget = 8400) {
+  const own = (d) => ON_DEMAND.has(nameOf(d)) || LEAN_DEMAND.has(nameOf(d));
+  const order = [...deferred.filter(own), ...deferred.filter((d) => !own(d))];
+  const out = [];
+  let used = 0;
+  const named = [];
+  let i = 0;
+  for (; i < order.length; i++) {
+    const line = `- ${nameOf(order[i])}: ${summary(order[i])}`;
+    if (used + line.length + 1 > budget * 0.7) break;
+    out.push(line);
+    used += line.length + 1;
+  }
+  for (; i < order.length; i++) {
+    const n = nameOf(order[i]);
+    if (used + n.length + 2 > budget - 80) break;
+    named.push(n);
+    used += n.length + 2;
+  }
+  if (named.length) out.push(`- also (names only – load_tools with a query searches their descriptions): ${named.join(', ')}`);
+  if (i < order.length) out.push(`- … and ${order.length - i} more: load_tools with a query (a word from the name or what it does) finds them`);
+  return out.join('\n');
+}
+
 export function loadToolsDef(deferred) {
-  const lines = deferred.map((d) => `- ${nameOf(d)}: ${summary(d)}`).join('\n');
+  const lines = deferredList(deferred);
   return {
     type: 'function',
     function: {
       name: 'load_tools',
-      description: `More tools are available but not loaded yet (to keep requests small). Call load_tools with the names you need (or a search word that matches names and descriptions); their full definitions are added and you can call them from your next step on. Available:\n${lines}`.slice(0, 9000),
+      description: `More tools are available but not loaded yet (to keep requests small). Call load_tools with the names you need (or a search word that matches names and descriptions); their full definitions are added and you can call them from your next step on. Available:\n${lines}`,
       parameters: { type: 'object', properties: { names: { type: 'array', items: { type: 'string' }, description: 'Exact tool names' }, query: { type: 'string', description: 'Or: load every tool whose name or description contains this' } } },
     },
   };

@@ -140,6 +140,53 @@ export function nextSpeakable(md, from = 0) {
   return { text: s.slice(from, end), upto: end };
 }
 
+// Only real HTML tags are left out: "while i < n and j > 0" and vector<int> are read as written (decision 275).
+const HTML_TAG =
+  /<\/?(a|abbr|b|big|blockquote|br|center|cite|code|dd|del|details|div|dl|dt|em|font|h[1-6]|hr|i|img|ins|kbd|li|mark|ol|p|pre|q|s|small|span|strike|strong|style|sub|summary|sup|table|tbody|td|tfoot|th|thead|tr|tt|u|ul|var|section|article|header|footer|figure|figcaption|svg|path)\b[^<>]*>/gi;
+
+const GREEK = 'alpha beta gamma delta epsilon theta lambda mu sigma omega phi pi rho tau eta zeta xi chi psi nu kappa Delta Gamma Sigma Omega Theta Lambda Phi Pi';
+const MATH_WORDS = {
+  cdot: 'times', times: 'times', div: 'divided by', pm: 'plus or minus', le: 'less than or equal to', leq: 'less than or equal to', ge: 'greater than or equal to',
+  geq: 'greater than or equal to', neq: 'not equal to', ne: 'not equal to', approx: 'approximately', infty: 'infinity', to: 'to', rightarrow: 'to', in: 'in',
+  sum: 'the sum of', prod: 'the product of', int: 'the integral of', lim: 'the limit', partial: 'partial', nabla: 'nabla', ldots: '…', cdots: '…', dots: '…',
+  ...Object.fromEntries(GREEK.split(' ').map((g) => [g, g.toLowerCase()])),
+};
+/**
+ * A formula read simply (decision 275): \log → log, \frac{a}{b} → a over b, x^2 → x squared, a_i → a sub i;
+ * one that is still mostly commands after that (matrices, environments, long ones) is read as "(formula)".
+ */
+export function spokenMath(tex) {
+  let t = String(tex || '').trim();
+  if (!t) return '';
+  if (/\\begin\{|\\\\/.test(t) || t.length > 120) return '(formula)';
+  const arg = '\\{([^{}]*)\\}';
+  for (let i = 0; i < 4; i++) {
+    t = t
+      .replace(new RegExp('\\\\[dt]?frac\\s*' + arg + '\\s*' + arg, 'g'), ' ($1 over $2) ')
+      .replace(new RegExp('\\\\sqrt\\s*' + arg, 'g'), ' the square root of ($1) ')
+      .replace(new RegExp('\\\\(?:text|mathrm|mathbf|mathit|operatorname|mathbb|mathcal)\\s*' + arg, 'g'), ' $1 ');
+  }
+  t = t
+    .replace(/\\(left|right|big|Big|bigg|Bigg|displaystyle|,|;|!|quad|qquad)/g, ' ')
+    .replace(/\^\{?2\}?(?![\d])/g, ' squared ')
+    .replace(/\^\{?3\}?(?![\d])/g, ' cubed ')
+    .replace(/\^\{([^{}]*)\}|\^(\\?\w)/g, (_, a, b) => ` to the power ${a ?? b} `)
+    .replace(/_\{([^{}]*)\}|_(\\?\w)/g, (_, a, b) => ` sub ${a ?? b} `)
+    .replace(/\\([A-Za-z]+)/g, (m, w) => (MATH_WORDS[w] ? ` ${MATH_WORDS[w]} ` : /^(log|ln|sin|cos|tan|exp|max|min|det|gcd|mod)$/.test(w) ? ` ${w} ` : m))
+    .replace(/<=/g, ' less than or equal to ')
+    .replace(/>=/g, ' greater than or equal to ')
+    .replace(/</g, ' less than ')
+    .replace(/>/g, ' greater than ')
+    .replace(/=/g, ' equals ')
+    .replace(/\+/g, ' plus ')
+    .replace(/(?<=[\w)\s])-(?=[\w(\s])/g, ' minus ')
+    .replace(/[{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (/\\[A-Za-z]/.test(t)) return '(formula)';
+  return t;
+}
+
 /**
  * Markdown reply → what to read aloud: no code blocks, links, markup or emoji.
  * dialogueOnly: in roleplay, read just the quoted speech (falls back to everything if there is none).
@@ -154,9 +201,18 @@ export function speechText(md, { dialogueOnly = false, skipActions = false } = {
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
+    .replace(/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g, (_, a, b, c) => ' ' + spokenMath(a ?? b ?? c) + ' ')
+    .replace(/(?<![\p{L}\p{N}\\])\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d)/gu, (m, f) => (/[\\^_=+{}<>]|^\w$/.test(f) ? spokenMath(f) : m))
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(HTML_TAG, ' ')
     .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
-    .replace(/[*_~#|]/g, '')
+    .replace(/\s<=\s/g, ' less than or equal to ')
+    .replace(/\s>=\s/g, ' greater than or equal to ')
+    .replace(/\s<\s/g, ' less than ')
+    .replace(/\s>\s/g, ' greater than ')
+    .replace(/(^|[^\p{L}\p{N}_])(__?)(?=\S)([^_\n]+?)\2(?![\p{L}\p{N}_])/gu, '$1$3')
+    .replace(/(?<=[\p{L}\p{N}])_(?=[\p{L}\p{N}])/gu, ' ')
+    .replace(/[*~#|]/g, '')
     .replace(/\p{Extended_Pictographic}/gu, '');
   if (dialogueOnly) {
     const said = [...t.matchAll(/[“"«]([^”"»]{2,})[”"»]/g)].map((m) => m[1].trim());

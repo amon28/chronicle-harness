@@ -224,6 +224,11 @@ window.__ocmB={
    if(r.top>innerHeight||r.bottom<0)line+=' (off-screen, scroll to reach)';
    out.push(line);}
   var xf=0;[].forEach.call(document.querySelectorAll('iframe,frame'),function(f){if(xf>=5)return;var cd=null;try{cd=f.contentDocument}catch(x){}if(cd)return;var r=f.getBoundingClientRect();if(r.width<50||r.height<30||r.bottom<0||r.top>innerHeight*3||!vis(f))return;var h='';try{h=new URL(f.src,location.href).host}catch(x){}xf++;
+   var hn=h.replace(/:\d+$/,'').replace(/^\[|\]$/g,'').toLowerCase(),loc=hn&&(/^(localhost|::1)$|\.(localhost|local|internal)$|^[^.:]+$|^(127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(hn));
+   /* a frame from a local-network address was never loaded (the app blocks those): said, not shown as a box to look into */
+   /* on a page that is itself on a local address (one the chat was allowed, decision 271) another local frame may be allowed too: not claimed either way */
+   var here=String(location.hostname||'').toLowerCase(),hereLoc=/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)\d/.test(here);
+   if(loc&&!hereLoc){out.push('[frame] to '+h+' – NOT LOADED: the app blocks local-network addresses, nothing was sent to '+hn+'; the box is empty, there is nothing inside to read or click');return;}
    out.push('[frame] from '+(h||'another site')+(f.title?' "'+clean(f.title).slice(0,50)+'"':'')+' at x '+Math.round(r.left)+'–'+Math.round(r.right)+', y '+Math.round(r.top)+'–'+Math.round(r.bottom)+' – another site, so what is inside is not in this list: take a screenshot, then mouse kind click at a point inside it');});
   var full=bodyT;fds.forEach(function(d){var f=d.defaultView.frameElement,t=clean(d.body.innerText);if(t)full+=' [frame '+((f&&(f.getAttribute('src')||f.id))||'')+': '+t+']';});
   srs.forEach(function(r){var t=clean([].map.call(r.children,function(c){return c.innerText||''}).join(' '));if(t&&full.indexOf(t)<0)full+=' ['+r.host.tagName.toLowerCase()+': '+t+']';});

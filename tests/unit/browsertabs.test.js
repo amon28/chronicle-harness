@@ -63,6 +63,15 @@ describe('tabs', () => {
     const r = await call({ action: 'read' });
     expect(r.result).toMatch(/A tab closed itself \(a popup that finished\) – you are on tab 0 of 1/);
   });
+  it('a request the app refused because it goes to the local network is said once, as not loaded (decision 268)', async () => {
+    st.refused = ['frame or file http://router.lan/admin (router.lan points to 192.168.1.1, a local address)'];
+    const r = await call({ action: 'read' });
+    expect(r.result).toMatch(/\[Not loaded – the app blocks local-network addresses, so nothing was sent to them: frame or file http:\/\/router\.lan\/admin \(router\.lan points to 192\.168\.1\.1/);
+    expect(r.result).toMatch(/nothing inside to read or click/);
+    delete st.refused; // the phone clears it once said
+    const r2 = await call({ action: 'read' });
+    expect(r2.result).not.toMatch(/Not loaded/);
+  });
   it('list, switch and close', async () => {
     tabs = [{ index: 0, url: 'https://example.com/', title: 'Home', active: false }, { index: 1, url: 'https://accounts.example/', title: 'Sign in', active: true }];
     const l = await call({ action: 'tabs' });
@@ -145,7 +154,7 @@ describe('state', () => {
       if (o.js.includes('JSON.stringify(window.__ocmE||{})')) return { value: JSON.stringify(JSON.stringify({ done: true, v: ran.includes('localStorage.setItem(k') ? '0' : JSON.stringify({ origin: 'https://example.com', local: { token: 'abc' }, session: {}, idb: [] }) })) };
       return orig(o);
     })(globalThis.__ocmBrowser.eval);
-    const ctx = { convId: ID, putFile: (p, b) => ((files[p] = b), '/workspace/' + p), workspace: { files: {} } };
+    const ctx = { convId: ID, putFile: (p, b) => ((files[p] = b), '/workspace/' + p), workspace: { files: {} }, ask: async () => 'Save it' };
     const s = await runBrowser({ action: 'state', op: 'save', name: 'my site' }, ctx);
     expect(s.result).toMatch(/Saved https:\/\/example\.com: 2 cookies, 1 localStorage .* → \/workspace\/browser-state\/my-site\.json. It holds this site's sign-in: do not commit/);
     const saved = JSON.parse(new TextDecoder().decode(files['browser-state/my-site.json']));

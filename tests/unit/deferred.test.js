@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitDeferred, loadToolsDef, pickToLoad } from '../../src/deferred.js';
+import { splitDeferred, loadToolsDef, pickToLoad, deferredList } from '../../src/deferred.js';
 
 const def = (name, desc = 'Does a thing. More text here.') => ({ type: 'function', function: { name, description: desc, parameters: { type: 'object', properties: { x: { type: 'string', description: 'y'.repeat(300) } } } } });
 describe('deferred tools', () => {
@@ -39,5 +39,33 @@ describe('built-in tools on demand (decision 175)', () => {
     expect(size(deferred) / size(all)).toBeGreaterThan(0.35);
     // loaded ones are sent again
     expect(names(splitBuiltins(all, ['calendar']).active)).toContain('calendar');
+  });
+});
+
+describe('the load_tools list within budget (decision 269)', () => {
+  const def = (name, d = 'Does a thing that is described at some length here.') => ({ type: 'function', function: { name, description: d } });
+  it('built-ins come first and are never cut off behind a hundred MCP tools; the rest go to names only, then "and N more"', () => {
+    const mcp = Array.from({ length: 400 }, (_, i) => def(`mcp_server_tool_number_${i}`, 'An MCP tool with a long description that takes up a good part of the budget. More words.'));
+    const all = [...mcp, def('calendar', 'Read and add calendar events.'), def('claude_code', 'Run Claude Code.')];
+    const t = deferredList(all);
+    expect(t.split('\n')[0]).toBe('- calendar: Read and add calendar events.');
+    expect(t.split('\n')[1]).toBe('- claude_code: Run Claude Code.');
+    expect(t).toMatch(/- also \(names only – load_tools with a query searches their descriptions\): mcp_server_tool_number_\d+, /);
+    expect(t).toMatch(/- … and \d+ more: load_tools with a query/);
+    expect(t.length).toBeLessThan(8600);
+    expect(loadToolsDef(all).function.description).toContain('- calendar:');
+  });
+  it('a short list is every tool with its line', () => {
+    expect(deferredList([def('a', 'One.'), def('b', 'Two.')])).toBe('- a: One.\n- b: Two.');
+  });
+});
+
+describe('the one line of a deferred tool', () => {
+  it('is cut at a word with …, and a too-short first sentence takes the next one', () => {
+    const d = (desc) => ({ type: 'function', function: { name: 't', description: desc } });
+    expect(deferredList([d('Short one. It lists the jobs kept on the computer for an hour.')])).toBe('- t: Short one. It lists the jobs kept on the computer for an hour.');
+    const long = deferredList([d('Look at the phone calendar and the contacts and the location and the places nearby and the weather and the time zones of the cities the user travels to and much more besides.')]);
+    expect(long).toMatch(/^- t: Look at the phone calendar .*[a-z]…$/);
+    expect(long.length).toBeLessThan(150);
   });
 });

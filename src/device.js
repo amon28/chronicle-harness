@@ -62,22 +62,31 @@ export function eventLine(e) {
 }
 
 const allowed = new Set(); // `${chat}:${what}` the user said yes to in this app run
+// …and kept with the chat itself (ctx.deviceOks, decision 270): the OK was asked again after every app restart
 async function okOnce(ctx, what, question, yes) {
   const key = `${ctx.convId || ''}:${what}`;
-  if (allowed.has(key)) return null;
+  if (allowed.has(key) || ctx.deviceOks?.has(what)) return null;
   if (!ctx.ask) return { ok: false, result: `Reading the ${what} needs the user's OK, which is not available here.`, display: { error: 'unavailable' } };
   ctx.onStatus?.('waiting for your OK…');
   const ans = await ctx.ask(question, [yes, 'Not now'], ctx.signal);
   if (ans !== yes) return { ok: false, result: `The user said no (${ans}).`, display: { error: 'declined', path: what } };
   allowed.add(key);
+  ctx.deviceOks?.add(what);
   return null;
 }
 /** for tests */
 export const forgetDeviceOks = () => allowed.clear();
 /** The same once-per-chat OK for the other phone tools (places, Wi-Fi names, phone controls). */
 export const deviceOkOnce = okOnce;
-export const deviceOkGiven = (ctx, what) => allowed.has(`${ctx.convId || ''}:${what}`);
-export const deviceOkGrant = (ctx, what) => void allowed.add(`${ctx.convId || ''}:${what}`);
+export const deviceOkGiven = (ctx, what) => allowed.has(`${ctx.convId || ''}:${what}`) || !!ctx.deviceOks?.has(what);
+export const deviceOkGrant = (ctx, what) => {
+  allowed.add(`${ctx.convId || ''}:${what}`);
+  ctx.deviceOks?.add(what);
+};
+/** The chat's OKs were taken back (the chat's ✕ on "Allowed in this chat"): this app run's copy goes too. */
+export const forgetChatOks = (convId, what = null) => {
+  for (const k of [...allowed]) if (k.startsWith(`${convId}:`) && (!what || k === `${convId}:${what}`)) allowed.delete(k);
+};
 export const deviceFailed = (e, what) => failed(e, what);
 
 const failed = (e, what) => {
@@ -124,9 +133,17 @@ export async function runDeviceTool(name, args = {}, ctx = {}) {
       const from = Number.isFinite(parseWhen(args.from)) ? parseWhen(args.from) : Date.now();
       let to = Number.isFinite(parseWhen(args.to)) ? parseWhen(args.to) : from + 7 * 86400000;
       if (/^\d{4}-\d{2}-\d{2}$/.test(String(args.to || '').trim())) to += 86400000 - 1; // a date as the end: the whole day
-      const { events = [] } = await dev.events({ from: Math.round(from), to: Math.round(to), query: String(args.query || ''), limit: Math.max(1, Math.min(200, Math.round(args.limit) || 50)) });
+      const limit = Math.max(1, Math.min(200, Math.round(args.limit) || 50));
+      // what was really read (decision 270): the phone reads at most a year from the start, and at most `limit` events –
+      // both were cut without a word, so "no events in March" could mean "March was not looked at"
+      const YEAR = 366 * 86400000;
+      const clamped = to - from > YEAR;
+      if (clamped) to = from + YEAR;
+      const { events = [] } = await dev.events({ from: Math.round(from), to: Math.round(to), query: String(args.query || ''), limit });
       const span = `${day(new Date(from))} – ${day(new Date(to))}`;
-      return { ok: true, result: events.length ? `${events.length} event${events.length > 1 ? 's' : ''} (${span}):\n${events.map(eventLine).join('\n')}` : `No events ${args.query ? `matching “${args.query}” ` : ''}in ${span}.`, display: { path: `calendar ${span}`, count: events.length } };
+      const notes = [clamped && `only one year from the start is read at a time – ask again from ${day(new Date(to))} for later dates`, events.length >= limit && `these are the first ${limit}; more may exist – narrow the dates or the query${limit < 200 ? ', or raise limit (up to 200)' : ''}`].filter(Boolean);
+      const tail = notes.length ? `\n[${notes.join('; ')}]` : '';
+      return { ok: true, result: events.length ? `${events.length} event${events.length > 1 ? 's' : ''} (${span}):\n${events.map(eventLine).join('\n')}${tail}` : `No events ${args.query ? `matching “${args.query}” ` : ''}in ${span}.${tail}`, display: { path: `calendar ${span}`, count: events.length } };
     } catch (e) {
       return failed(e, 'calendar');
     }
@@ -136,9 +153,11 @@ export async function runDeviceTool(name, args = {}, ctx = {}) {
     if (no) return no;
     try {
       ctx.onStatus?.('Waiting for Android…');
-      const { contacts = [] } = await dev.contacts({ query: String(args.query || ''), limit: Math.max(1, Math.min(50, Math.round(args.limit) || 20)) });
+      const limit = Math.max(1, Math.min(50, Math.round(args.limit) || 20));
+      const { contacts = [] } = await dev.contacts({ query: String(args.query || ''), limit });
       const line = (c) => [c.name, ...(c.phones || []).map((p) => `${p.label}: ${p.value}`), ...(c.emails || []).map((m) => `${m.label}: ${m.value}`)].join(' · ');
-      return { ok: true, result: contacts.length ? contacts.map(line).join('\n') : `No contact matches “${args.query || ''}”.`, display: { path: `contacts ${args.query || ''}`.trim(), count: contacts.length } };
+      const more = contacts.length >= limit ? `\n[the first ${limit}; more may match – a longer query narrows it${limit < 50 ? ', or raise limit (up to 50)' : ''}]` : '';
+      return { ok: true, result: contacts.length ? contacts.map(line).join('\n') + more : `No contact matches “${args.query || ''}”.`, display: { path: `contacts ${args.query || ''}`.trim(), count: contacts.length } };
     } catch (e) {
       return failed(e, 'contacts');
     }

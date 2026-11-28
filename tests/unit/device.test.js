@@ -56,6 +56,30 @@ describe('device tools (calendar, contacts, location)', () => {
     expect(asked).toBe(3);
   });
 
+  it('the OK is kept with the chat: after the app starts again it is not asked again (decision 270)', async () => {
+    const kept = new Set();
+    const deviceOks = { has: (w) => kept.has(w), add: (w) => kept.add(w) };
+    let asked = 0;
+    const ctx = { device: fakeDevice(), convId: 'k1', deviceOks, ask: async () => (asked++, 'Allow') };
+    await runDeviceTool('calendar', {}, ctx);
+    expect([...kept]).toEqual(['calendar']);
+    forgetDeviceOks(); // the app run is over
+    await runDeviceTool('calendar', {}, ctx);
+    expect(asked).toBe(1);
+  });
+
+  it('a span past a year, and a full page of events or contacts, are said (decision 270)', async () => {
+    const dev = fakeDevice();
+    const ctx = { device: dev, convId: 'span1', ask: async () => 'Allow' };
+    const r = await runDeviceTool('calendar', { from: '2026-01-01', to: '2028-01-01', limit: 1 }, ctx);
+    expect(dev.calls.at(-1)[1].to - dev.calls.at(-1)[1].from).toBe(366 * 86400000);
+    expect(r.result).toMatch(/\[only one year from the start is read at a time – ask again from .* for later dates; these are the first 1; more may exist – narrow the dates or the query, or raise limit \(up to 200\)\]$/);
+    const c = await runDeviceTool('contacts', { query: 'a', limit: 1 }, ctx);
+    expect(c.result).toMatch(/\[the first 1; more may match/);
+    const one = await runDeviceTool('contacts', { query: 'a' }, ctx);
+    expect(one.result).not.toMatch(/more may match/);
+  });
+
   it('a date as the end of a range means the whole day', async () => {
     const dev = fakeDevice();
     const ctx = { device: dev, convId: 'c', ask: async (q, o) => o[0] };

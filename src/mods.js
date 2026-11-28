@@ -3,7 +3,8 @@
 // Each mod runs in its own sandboxed iframe (opaque origin, no storage, no DOM access to the app, Content-Security-Policy
 // that blocks every network request). The only way out is postMessage to the host below, which checks the permissions the
 // user approved. See docs/MODS.md.
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
+import { frameChannel } from './runscript.js';
 import { unsafe } from './websearch.js';
 
 export const PERMISSIONS = {
@@ -69,7 +70,25 @@ const shim = (token, manifest) => `
 (() => {
   const TOKEN = ${JSON.stringify(token)};
   const PERMS = ${JSON.stringify(manifest.permissions)};
-  const out = (m) => parent.postMessage({ __mod: TOKEN, ...m }, '*');
+  // only the MessagePort the app hands over before the mod's code starts reaches the app (decision 273): a page the
+  // frame is navigated to never gets it. Loading another page is cancelled where the Navigation API exists; a page
+  // that goes anyway says so on its way out ("left"), and the app stops the mod.
+  let send = null;
+  const out = (m) => send && send({ __mod: TOKEN, ...m });
+  try {
+    if (typeof navigation !== 'undefined') navigation.addEventListener('navigate', (e) => { if (e.cancelable) e.preventDefault(); out({ type: 'log', text: 'blocked: the mod tried to load another page (' + String(e.destination && e.destination.url).slice(0, 120) + ')' }); });
+  } catch (e) { /* no Navigation API: pagehide tells the app */ }
+  addEventListener('pagehide', () => out({ type: 'left' }));
+  const gotPort = new Promise((resolve) => {
+    const take = (e) => {
+      const m = e.data;
+      if (e.source !== parent || !m || m.__host !== TOKEN || m.type !== 'port' || !e.ports || !e.ports[0]) return;
+      removeEventListener('message', take);
+      resolve(e.ports[0]);
+    };
+    addEventListener('message', take);
+  });
+  parent.postMessage({ __mod: TOKEN, type: 'hello' }, '*');
   const pending = new Map();
   let seq = 0;
   const call = (type, payload) => new Promise((resolve, reject) => { const id = ++seq; pending.set(id, { resolve, reject }); out({ type, id, ...payload }); });
@@ -94,9 +113,9 @@ const shim = (token, manifest) => `
     fetch: (url, opts) => call('fetch', { url: String(url), opts: opts || {} }),
   };
   Object.freeze(mod.storage);
-  addEventListener('message', async (e) => {
+  const onHost = async (e) => {
     const m = e.data;
-    if (e.source !== parent || !m || m.__host !== TOKEN) return;
+    if (!m || m.__host !== TOKEN) return;
     if (m.type === 'reply') {
       const p = pending.get(m.id);
       if (p) { pending.delete(m.id); m.ok ? p.resolve(m.value) : p.reject(new Error(m.error || 'failed')); }
@@ -113,13 +132,17 @@ const shim = (token, manifest) => `
         out({ type: 'result', id: m.id, ok: false, error: String((err && err.message) || err) });
       }
     }
-  });
+  };
   // take away what could be used to reach outside (the CSP already blocks the network; this removes the obvious doors)
   for (const k of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'Worker', 'SharedWorker', 'indexedDB', 'caches', 'localStorage', 'sessionStorage', 'open', 'navigator']) {
     try { Object.defineProperty(window, k, { value: undefined, configurable: false, writable: false }); } catch (e) { try { window[k] = undefined; } catch (e2) { /* ignore */ } }
   }
   Object.defineProperty(window, 'mod', { value: Object.freeze(mod), configurable: false, writable: false });
-  window.__ocmBoot = (async () => { /*MODCODE*/ })();
+  window.__ocmBoot = gotPort.then((port) => {
+    send = port.postMessage.bind(port);
+    port.onmessage = onHost;
+    return (async () => { /*MODCODE*/ })();
+  });
   window.__ocmBoot.then(
     () => out({ type: 'ready', tools: Object.entries(tools).map(([n, t]) => ({ name: n, description: String(t.description || ''), parameters: t.parameters || { type: 'object', properties: {} } })), commands: Object.entries(commands).map(([n, c]) => ({ name: n, description: String(c.description || '') })), hooks: Object.keys(hooks), sources: Object.entries(sources).map(([n, s]) => ({ name: n, description: String(s.description || '') })), panels: Object.entries(panels).map(([n, p]) => ({ name: n, description: String(p.description || ''), icon: String(p.icon || '').slice(0, 4) })) }),
     (err) => out({ type: 'error', error: String((err && err.stack) || err).slice(0, 800) }),
@@ -134,26 +157,74 @@ export function modDocument(token, manifest, code) {
 
 const TIMEOUT = { tool: 30000, command: 15000, hook: 2500 };
 
-async function modFetch(url, opts) {
-  const why = unsafe(url);
-  if (why) throw new Error(`Won't open that address (${why})`);
-  if (!/^https:\/\//i.test(url)) throw new Error('Only https:// addresses');
-  const method = String(opts.method || 'GET').toUpperCase();
-  const headers = Object.fromEntries(Object.entries(opts.headers || {}).map(([k, v]) => [String(k), String(v)]));
-  const body = opts.body == null ? undefined : typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
-  let status;
-  let text;
-  if (Capacitor.isNativePlatform()) {
-    const r = await CapacitorHttp.request({ url, method, headers, data: body, responseType: 'text', connectTimeout: 15000, readTimeout: 20000 });
-    status = r.status;
-    text = typeof r.data === 'string' ? r.data : JSON.stringify(r.data);
-  } else {
-    const r = await fetch(url, { method, headers, body, credentials: 'omit' });
-    status = r.status;
-    text = await r.text();
+const CREDENTIALS = /^(authorization|cookie|proxy-authorization)$/i;
+const hostOf = (url) => {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
   }
-  if (text.length > 2_000_000) text = text.slice(0, 2_000_000);
-  return { status, ok: status >= 200 && status < 300, body: text };
+};
+let goStream = null;
+/** On the phone: does the host resolve to a private address? (GoStream.checkPublic, the check fetch_url makes) */
+const nativePublic = (url) => (goStream ||= registerPlugin('GoStream')).checkPublic({ url });
+async function sendOnce(url, method, headers, body) {
+  if (Capacitor.isNativePlatform()) {
+    const r = await CapacitorHttp.request({ url, method, headers, data: body, responseType: 'text', connectTimeout: 15000, readTimeout: 20000, disableRedirects: true });
+    return { status: r.status, headers: r.headers || {}, text: typeof r.data === 'string' ? r.data : JSON.stringify(r.data) };
+  }
+  const r = await fetch(url, { method, headers, body, credentials: 'omit', redirect: 'manual' });
+  // the browser does not say where a redirect goes (an opaque answer), so it cannot be checked – and is not followed
+  if (r.type === 'opaqueredirect') throw new Error(`${url} redirects, and the browser does not say where to – not followed`);
+  return { status: r.status, headers: Object.fromEntries(r.headers), text: await r.text() };
+}
+
+/**
+ * A mod's request. Redirects are followed here, one hop at a time (decision 273): each hop must be https, not a local
+ * address (and, on the phone, not resolve to one) and on a host the mod's net: permission covers – CapacitorHttp
+ * following them itself let a permitted host send the request on anywhere, a private address included. A hop to
+ * another origin drops Authorization, Cookie and Proxy-Authorization. Exported for testing (send, isPublic: stand-ins).
+ */
+export async function modFetch(url, opts = {}, { allowed = () => true, send = sendOnce, isPublic = Capacitor.isNativePlatform() ? nativePublic : null } = {}) {
+  let method = String(opts.method || 'GET').toUpperCase();
+  let headers = Object.fromEntries(Object.entries(opts.headers || {}).map(([k, v]) => [String(k), String(v)]));
+  let body = opts.body == null ? undefined : typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
+  let hop = String(url);
+  for (let hops = 0; ; hops++) {
+    const why = unsafe(hop);
+    if (why) throw new Error(hops ? `${url} redirects to ${hop}, which is not opened (${why})` : `Won't open that address (${why})`);
+    if (!/^https:\/\//i.test(hop)) throw new Error(hops ? `${url} redirects to ${hop} – only https:// addresses are opened` : 'Only https:// addresses');
+    const host = hostOf(hop);
+    if (!allowed(host)) throw new Error(hops ? `${url} redirects to ${host}, which this mod may not connect to (it must list "net:${host}" in its permissions)` : `This mod may not connect to ${host || 'that address'} (it must list "net:${host}" in its permissions)`);
+    if (isPublic)
+      try {
+        await isPublic(hop);
+      } catch (e) {
+        throw new Error(`Won't open ${host}: ${String(e?.message || e).replace(/^Error:\s*/, '') || 'it is on a private network'}`);
+      }
+    const r = await send(hop, method, headers, body);
+    const loc = r.status >= 300 && r.status < 400 ? Object.entries(r.headers || {}).find(([k]) => k.toLowerCase() === 'location')?.[1] : null;
+    if (!loc) {
+      let text = String(r.text ?? '');
+      if (text.length > 2_000_000) text = text.slice(0, 2_000_000);
+      return { status: r.status, ok: r.status >= 200 && r.status < 300, body: text };
+    }
+    if (hops >= 5) throw new Error(`${url} redirects too many times`);
+    let next;
+    try {
+      next = new URL(String(loc), hop).href;
+    } catch {
+      throw new Error(`${hop} redirects to an address that is not valid`);
+    }
+    if (new URL(next).origin !== new URL(hop).origin) headers = Object.fromEntries(Object.entries(headers).filter(([k]) => !CREDENTIALS.test(k)));
+    // 307 and 308 repeat the request as it was; 301, 302 and 303 become a plain GET, as browsers do
+    if (r.status !== 307 && r.status !== 308) {
+      method = 'GET';
+      body = undefined;
+      headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k.toLowerCase() !== 'content-type'));
+    }
+    hop = next;
+  }
 }
 
 export class ModInstance {
@@ -173,7 +244,7 @@ export class ModInstance {
     this.panels = [];
     this.status = '';
     this.logs = [];
-    this.onMessage = (e) => this.handle(e);
+    this.channel = null;
   }
 
   start() {
@@ -184,7 +255,8 @@ export class ModInstance {
       f.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;pointer-events:none';
       this.frame = f;
       this.resolveStart = resolve;
-      window.addEventListener('message', this.onMessage);
+      // the frame's own page gets a MessagePort; window messages are not listened to (decision 273)
+      this.channel = frameChannel(f, { tag: '__mod', token: this.token, onMessage: (m) => this.handle(m), onLeft: () => this.left() });
       this.startTimer = setTimeout(() => this.fail('The mod did not finish starting within 6 seconds'), 6000);
       f.srcdoc = modDocument(this.token, this.manifest, this.code);
       document.body.append(f);
@@ -198,8 +270,13 @@ export class ModInstance {
     this.resolveStart = null;
     this.host.changed();
   }
+  /** The mod's frame loaded another page (decision 273): it is not the mod any more, so it is stopped. */
+  left() {
+    this.stop();
+    this.fail('The mod loaded another page into its frame, so it was stopped (a mod runs only in its own page)');
+  }
   stop() {
-    window.removeEventListener('message', this.onMessage);
+    this.channel?.close();
     clearTimeout(this.startTimer);
     for (const p of this.pending.values()) p.reject(new Error('The mod was stopped'));
     this.pending.clear();
@@ -207,14 +284,13 @@ export class ModInstance {
     this.ready = false;
   }
   post(m) {
-    this.frame?.contentWindow?.postMessage({ __host: this.token, ...m }, '*');
+    this.channel?.post({ __host: this.token, ...m });
   }
   has(p) {
     return this.manifest.permissions.includes(p);
   }
-  async handle(e) {
-    const m = e.data;
-    if (!m || m.__mod !== this.token || e.source !== this.frame?.contentWindow) return;
+  async handle(m) {
+    if (!m || m.__mod !== this.token) return;
     switch (m.type) {
       case 'ready':
         clearTimeout(this.startTimer);
@@ -262,15 +338,7 @@ export class ModInstance {
     try {
       let value;
       if (m.type === 'fetch') {
-        const host = (() => {
-          try {
-            return new URL(m.url).hostname.toLowerCase();
-          } catch {
-            return '';
-          }
-        })();
-        if (!(this.has('net:*') || this.has('net:' + host))) throw new Error(`This mod may not connect to ${host || 'that address'} (it must list "net:${host}" in its permissions)`);
-        value = await modFetch(m.url, m.opts || {});
+        value = await modFetch(m.url, m.opts || {}, { allowed: (host) => this.has('net:*') || this.has('net:' + host) });
       } else {
         if (!this.has('storage')) throw new Error('No storage permission');
         const data = this.host.data(this.manifest.id);

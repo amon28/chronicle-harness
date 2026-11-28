@@ -76,7 +76,7 @@ test('a Claude Code chat calls Chronicle tools over MCP: consent sheet, permissi
   // 3. Settings › Permissions "ask me" for memory: Chronicle's own question, naming Claude Code
   await app.fill('#input', 'mcp memory {"action":"list"}');
   await app.click('#send-btn');
-  await expect(app.locator('#ask-sheet')).toContainText('Allow memory (Claude Code)', { timeout: 20000 });
+  await expect(app.locator('#ask-sheet')).toContainText('Allow 🧠 Memory (Claude Code)', { timeout: 20000 });
   await app.click('#ask-options .menu-item:has-text("Deny")');
   await expect(reply).toContainText('memory ERROR -> The user did not allow this memory call', { timeout: 20000 });
   await app.waitForFunction(() => !document.body.classList.contains('streaming'), null, { timeout: 20000 });

@@ -91,9 +91,29 @@ public class MessagesPlugin extends Plugin {
                     where.add(Telephony.Sms.BODY + " LIKE ? ESCAPE '\\'");
                     args.add(likeArg(query));
                 }
+                // a sender given by name ("Mom") is also every number of the contacts with that name – the address
+                // of a text is a number, so a name alone found nothing but the senders that ARE names (DHL)
+                JSArray matched = new JSArray();
                 if (!from.isEmpty()) {
-                    where.add(Telephony.Sms.ADDRESS + " LIKE ? ESCAPE '\\'");
+                    List<String> or = new ArrayList<>();
+                    or.add(Telephony.Sms.ADDRESS + " LIKE ? ESCAPE '\\'");
                     args.add(likeArg(from));
+                    if (from.matches(".*\\p{L}.*")) {
+                        for (String[] hit : numbersOf(from)) {
+                            String tail = hit[1].replaceAll("[^0-9]", "");
+                            if (tail.length() > 9) tail = tail.substring(tail.length() - 9); // without the country code
+                            if (tail.length() < 4) continue;
+                            // the address may be stored with spaces, dashes or brackets: they are taken out before comparing
+                            or.add("REPLACE(REPLACE(REPLACE(REPLACE(" + Telephony.Sms.ADDRESS + ",' ',''),'-',''),'(',''),')','') LIKE ?");
+                            args.add("%" + tail + "%");
+                            JSObject m = new JSObject();
+                            m.put("name", hit[0]);
+                            m.put("number", hit[1]);
+                            matched.put(m);
+                            if (or.size() > 20) break;
+                        }
+                    }
+                    where.add("(" + android.text.TextUtils.join(" OR ", or) + ")");
                 }
                 if (since > 0) {
                     where.add(Telephony.Sms.DATE + " >= ?");
@@ -110,11 +130,14 @@ public class MessagesPlugin extends Plugin {
                         int t = c.getInt(3);
                         o.put("type", t == Telephony.Sms.MESSAGE_TYPE_SENT ? "sent" : t == Telephony.Sms.MESSAGE_TYPE_INBOX ? "inbox" : t == Telephony.Sms.MESSAGE_TYPE_DRAFT ? "draft" : "other");
                         o.put("read", c.getInt(4) == 1);
+                        String who = nameOf(o.getString("address"));
+                        if (who != null) o.put("name", who);
                         out.put(o);
                     }
                 }
                 JSObject r = new JSObject();
                 r.put("messages", out);
+                if (matched.length() > 0) r.put("contacts", matched);
                 call.resolve(r);
             } catch (SecurityException e) {
                 call.reject("Android does not allow Chronicle to read text messages.", "DENIED");
@@ -122,6 +145,38 @@ public class MessagesPlugin extends Plugin {
                 call.reject(String.valueOf(e.getMessage()));
             }
         }).start();
+    }
+
+    private boolean canReadContacts() {
+        return androidx.core.content.ContextCompat.checkSelfPermission(getContext(), android.Manifest.permission.READ_CONTACTS) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** [name, number] of the contacts whose name contains `name` (nothing without the contacts permission). */
+    private List<String[]> numbersOf(String name) {
+        List<String[]> out = new ArrayList<>();
+        if (!canReadContacts()) return out;
+        String[] cols = { android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER };
+        try (Cursor c = getContext().getContentResolver().query(android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI, cols, android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " LIKE ? ESCAPE '\\'", new String[] { likeArg(name) }, null)) {
+            while (c != null && c.moveToNext() && out.size() < 20) if (c.getString(1) != null) out.add(new String[] { c.getString(0) == null ? "" : c.getString(0), c.getString(1) });
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    private final java.util.Map<String, String> names = new java.util.HashMap<>();
+
+    /** The contact name for a number (null when none, or without the contacts permission). */
+    private String nameOf(String number) {
+        if (number == null || number.isEmpty() || !canReadContacts()) return null;
+        if (names.containsKey(number)) return names.get(number);
+        String n = null;
+        try (Cursor c = getContext().getContentResolver().query(android.net.Uri.withAppendedPath(android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI, android.net.Uri.encode(number)), new String[] { android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst()) n = c.getString(0);
+        } catch (Exception ignored) {
+        }
+        if (names.size() > 300) names.clear();
+        names.put(number, n);
+        return n;
     }
 
     @PluginMethod

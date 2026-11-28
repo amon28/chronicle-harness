@@ -30,3 +30,31 @@ describe('edit_lorebook', () => {
     expect(entries[0].content).toBe('The library is old.'); // the original is untouched
   });
 });
+
+// Decision 265: a roleplay persona that is not a full card has a greeting and extra greetings the tool can change too;
+// a character's note (depth prompt) is edited as text, its depth and role kept
+describe('greetings and the character note', () => {
+  const persona = { id: 'p1', name: 'Lia', character: false, description: 'A witch', prompt: 'You are Lia.', greeting: '*waves* Hello there.', alternate_greetings: ['Hi!', 'Oh, you again.'] };
+  it('changes a persona\'s greeting by an exact edit, and adds and removes its extra greetings', () => {
+    const r = planPersonaEdit(persona, { edits: [{ field: 'greeting', old_text: 'Hello there.', new_text: 'Welcome to my tower.' }], add_greetings: ['*looks up from a book*'], remove_greetings: [1] });
+    expect(r.persona.greeting).toBe('*waves* Welcome to my tower.');
+    expect(r.persona.alternate_greetings).toEqual(['Oh, you again.', '*looks up from a book*']);
+    expect(r.changed).toEqual(['greeting (1 edit)', '+1 greeting', '−1 greeting']);
+  });
+  it('sets a persona\'s greetings whole, and a number that is not there says how many there are', () => {
+    expect(planPersonaEdit(persona, { set: { greeting: 'New start.', alternate_greetings: ['A', 'B'] } }).persona).toMatchObject({ greeting: 'New start.', alternate_greetings: ['A', 'B'] });
+    expect(() => planPersonaEdit(persona, { remove_greetings: [5] })).toThrow(/2 extra greetings – no number 5/);
+  });
+  it('edits a character\'s note as text and keeps its depth and role', () => {
+    const ch = { id: 'c1', name: 'Mira', character: true, card: { name: 'Mira', description: 'd', first_mes: 'Hi', depth_prompt: { prompt: 'Mira is wary.', depth: 2, role: 'user' } } };
+    const r = planPersonaEdit(ch, { edits: [{ field: 'depth_prompt', old_text: 'wary', new_text: 'curious' }] });
+    expect(r.card.depth_prompt).toEqual({ prompt: 'Mira is curious.', depth: 2, role: 'user' });
+    expect(r.card.first_mes).toBe('Hi');
+    // a character without one gets it at the usual depth
+    const r2 = planPersonaEdit({ ...ch, card: { name: 'Mira', description: 'd' } }, { set: { depth_prompt: 'Speaks softly.' } });
+    expect(r2.card.depth_prompt).toEqual({ depth: 4, role: 'system', prompt: 'Speaks softly.' });
+  });
+  it('a picture alone is a change', () => {
+    expect(planPersonaEdit(persona, { image: 1 }).changed).toEqual([]);
+  });
+});

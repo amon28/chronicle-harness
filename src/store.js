@@ -291,9 +291,12 @@ let onSecretsLost = null;
 export const setSecretsLostHandler = (fn) => (onSecretsLost = fn);
 export const secureStorageActive = () => secureOk;
 
-/** Split settings into { secrets, clean } – clean has every key/token blanked. */
+/**
+ * Split settings into { secrets, clean } – clean has every key/token blanked. An MCP server's extra headers are where
+ * its API key goes, so they are kept with the keys too (decision 273: they stayed in IndexedDB in plain text).
+ */
 export function splitSecrets(s) {
-  const secrets = { providers: {}, providerAdmin: {}, mcp: {}, pc: {}, mcpOauth: {}, mcpBridge: {}, acp: {} };
+  const secrets = { providers: {}, providerAdmin: {}, mcp: {}, mcpHeaders: {}, pc: {}, mcpOauth: {}, mcpBridge: {}, acp: {} };
   const clean = { ...s };
   for (const k of TOP_SECRETS) {
     if (s[k]) secrets[k] = s[k];
@@ -315,6 +318,10 @@ export function splitSecrets(s) {
     if (m.bridgeSecret) {
       secrets.mcpBridge[m.id] = m.bridgeSecret;
       c.bridgeSecret = '';
+    }
+    if (m.headers) {
+      secrets.mcpHeaders[m.id] = m.headers;
+      c.headers = '';
     }
     return c;
   });
@@ -348,6 +355,7 @@ export function mergeSecrets(s, sec) {
     const o = sec.mcpOauth?.[m.id];
     if (o && m.oauth && !m.oauth.access && !m.oauth.refresh) m.oauth = { ...m.oauth, access: o.access, refresh: o.refresh };
     if (!m.bridgeSecret && sec.mcpBridge?.[m.id]) m.bridgeSecret = sec.mcpBridge[m.id];
+    if (!m.headers && sec.mcpHeaders?.[m.id]) m.headers = sec.mcpHeaders[m.id];
   }
   for (const a of s.acpAgents || []) if (!a.secret && sec.acp?.[a.id]) a.secret = sec.acp[a.id];
   for (const p of s.pcFiles || []) if (!p.secret && sec.pc?.[p.id]) p.secret = sec.pc[p.id];
@@ -396,8 +404,16 @@ export async function initSettings() {
   settingsCache = { ...defaults, ...(s || {}) };
   const sec = await readSecrets();
   mergeSecrets(settingsCache, sec);
+  // a local MCP server's bridge secret lives with the keys: if they were lost (decision 273), it gets a new one rather
+  // than none – a bridge started with an empty secret would answer anything on the phone
+  let fresh = false;
+  for (const m of settingsCache.mcpServers || [])
+    if (m.transport === 'stdio' && !m.bridgeSecret) {
+      m.bridgeSecret = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      fresh = true;
+    }
   // first run with secure storage: move any plain-text keys out of IndexedDB
-  if (secureOk && s && hasPlainSecrets(s)) {
+  if (fresh || (secureOk && s && hasPlainSecrets(s))) {
     saveSettings(settingsCache);
   }
   try {

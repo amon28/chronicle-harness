@@ -141,8 +141,15 @@ describe('dead weight at send time', () => {
     const three = [...base, ...turn('b', []), ...turn('c', []), ...turn('d', []), ...Array.from({ length: 8 }, () => reply([]))];
     const a = deadWeight(three, { cut: three.length }).args.get('1:0:0');
     expect(JSON.parse(a).path).toBe('big.py');
-    expect(JSON.parse(a).content).toMatch(/^y{200}… \[4800 chars left out – this call failed\]$/);
+    expect(JSON.parse(a).content).toMatch(/^y{200}… \[shortened here to save room: 4800 more characters were sent in this call\]$/);
     expect(clipArgs('{not json' + 'z'.repeat(900))).toMatch(/^\{"clipped":/);
+  });
+  it('a shell command, a job poll or a page read run again keeps its older result: the state may have changed (decision 269)', () => {
+    const st = (out) => call('shell', { command: 'git status' }, out);
+    const msgs = [...turn('a', [st('modified: a.js\n' + BIG), call('pc_job', { job: 'j1' }, 'Still running\n' + BIG), call('read_file', { path: 'r.md' }, BIG)]), ...turn('b', [st('nothing to commit\n' + BIG), call('pc_job', { job: 'j1' }, 'Exit code 0\n' + BIG), call('read_file', { path: 'r.md' }, BIG)]), ...Array.from({ length: 12 }, (_, i) => user('p' + i))];
+    const d = deadWeight(msgs);
+    expect([...d.results.values()]).toEqual([STUB_REPEAT]); // only the plain file read
+    expect(d.results.get('1:0:2')).toBe(STUB_REPEAT);
   });
   it('never touches the newest messages, and roleplay-free calls like ask_user are never stubbed', () => {
     const msgs = [...turn('a', [call('read_file', { path: 'x' }, BIG)]), ...turn('b', [call('read_file', { path: 'x' }, BIG)])];
